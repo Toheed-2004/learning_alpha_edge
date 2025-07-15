@@ -2,6 +2,7 @@ import os
 import time
 import datetime
 import pandas as pd
+from utils.data_utils import preprocess_klines
 from binance.client import Client
 print("starting point")
 
@@ -76,5 +77,7 @@ class binance_fetcher:
             df[col] = df[col].astype(float)
 
         df = df[['datetime', 'open', 'low', 'high', 'close', 'volume']]
-        df.to_csv(f"{symbol.lower()}_{self.time_horizon}_data.csv", index=False)
+        df=preprocess_klines(df,interpolate_method=self.interpolation_method,
+        fill_zero_volume=self.fill_zero_volume)
+        df.to_csv(f"{symbol.upper()}_{self.time_horizon}_clean_data.csv", index=False)
         print(f"[INFO] Saved {symbol} data.")
