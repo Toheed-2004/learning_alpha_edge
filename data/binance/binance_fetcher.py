@@ -39,5 +39,8 @@ def fetch_data(symbol, start_date, end_date):
         last_open_time = klines[-1][0]
         start_ts = last_open_time + 60_000
         time.sleep(0.5)
+    # Drop the last candle to avoid possibly incomplete data
+    if all_klines:
+        all_klines = all_klines[:-1]
 
     return all_klines

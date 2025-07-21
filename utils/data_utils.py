@@ -14,7 +14,7 @@ def preprocess_klines(df, interpolate_method='linear', fill_zero_volume='ffill')
 
     # Handle zero volume
     if fill_zero_volume == 'ffill':
-        df['volume'] = df['volume'].replace(0, pd.NA).fillna(method='ffill')
+        df['volume'] = df['volume'].replace(0, pd.NA).ffill()
     elif fill_zero_volume == 'bfill':
         df['volume'] = df['volume'].replace(0, pd.NA).fillna(method='bfill')
     elif fill_zero_volume == 'drop':
@@ -25,6 +25,7 @@ def preprocess_klines(df, interpolate_method='linear', fill_zero_volume='ffill')
 
     # Optional: Round again if needed
     df[numeric_cols] = df[numeric_cols].round(2)
+    df[numeric_cols] = df[numeric_cols].astype('float64')
 
     return df
 

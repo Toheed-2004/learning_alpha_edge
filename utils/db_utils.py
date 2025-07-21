@@ -29,4 +29,5 @@ def drop_all_tables(db_path):
             # Properly quote the table name in SQL
             cursor.execute(f'DROP TABLE IF EXISTS "{table_name}"')
             print(f"[INFO] Dropped table: '{table_name}'")
-drop_all_tables(db_path='D:\learning_alpha_edge\db\market_data.db')
+if __name__=="__main__":
+    drop_all_tables(db_path=r"D:\learning_alpha_edge\db\market_data.db")
