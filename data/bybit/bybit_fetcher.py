@@ -38,7 +38,6 @@ def fetch_data(symbol, start_date, end_date) -> pd.DataFrame:
         all_klines.extend(klines)
         last_open_time = int(klines[-1][0])
         # print(f"[DEBUG] Retrieved {len(all_klines)} total rows so far. Last timestamp: {last_open_time}")
-        klines = sorted(klines, key=lambda x: x[0])
         start_ts = last_open_time + 60 * 1000
 
     df = pd.DataFrame(all_klines, columns=[

@@ -16,7 +16,9 @@ class Data_Downloader:
         self.base_symbol=self.symbol.replace("USDT","").lower()
         self.exchange = exchange.lower()
         self.resample_to = resample_to
-        self.table_name = f"{self.exchange}_{self.base_symbol}_1min" 
+        self.table_name = f"{self.exchange}_{self.base_symbol}_1min"
+        self.full_df=None 
+        self.resampled_df=None
         self._update()
         klines=None
     
@@ -29,7 +31,7 @@ class Data_Downloader:
         conn.close()
         new_start_date = pd.to_datetime(result[0]) # New start date is set to the current maximum date.
         # new_end_date = datetime.now() 
-        new_end_date=datetime.strptime('2024-5-23',"%Y-%m-%d")
+        new_end_date=datetime.now()
                
         # Fetch new data
         if(self.exchange=='binance'):

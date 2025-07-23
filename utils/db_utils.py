@@ -8,7 +8,7 @@ def save_to_db(df, db_path, table_name):
     
     
     with sqlite3.connect(db_path) as conn:
-        df.to_sql(table_name, conn, if_exists='append', index=False)#if table already exists,do not overwrite it
+        df.to_sql(table_name, conn, if_exists='append', index=False)
     print(f"[INFO] Saved data to table: {table_name}")
 
 def drop_table(db_path, table_name):
