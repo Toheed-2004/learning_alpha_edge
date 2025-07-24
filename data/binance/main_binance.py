@@ -34,20 +34,9 @@ if __name__ == '__main__':
 
     for symbol in symbols:
         print(f"[INFO] Fetching {symbol}...")
-        klines = fetch_data(symbol, start_date, end_date)
+        df= fetch_data(symbol, start_date, end_date)
 
-        # Convert to DataFrame
-        df = pd.DataFrame(klines, columns=[
-            'open_time', 'open', 'high', 'low', 'close', 'volume',
-            'close_time', 'quote_asset_volume', 'number_of_trades',
-            'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
-        ])
-        df['open_time'] = pd.to_datetime(df['open_time'], unit='ms',utc=True )
-        df.rename(columns={'open_time': 'datetime'}, inplace=True)
-        for col in ['open', 'high', 'low', 'close', 'volume']:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-        df = df[['datetime', 'open', 'high', 'low', 'close', 'volume']]
-
+        
         # Preprocess
         df = preprocess_klines(df, interpolate_method, fill_zero_volume)
         base_symbol = symbol.replace('USDT', '').lower()

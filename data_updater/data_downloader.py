@@ -36,23 +36,10 @@ class Data_Downloader:
         # Fetch new data
         if(self.exchange=='binance'):
             binance=True
-            klines = binance_fetcher.fetch_data(self.symbol,new_start_date,new_end_date)
-            if not klines:
+            df_binance= binance_fetcher.fetch_data(self.symbol,new_start_date,new_end_date)
+            if df_binance.empty:
              print(f"[INFO] No new data for {self.symbol}")
              return
-            # Convert to DataFrame
-            df_binance = pd.DataFrame(klines, columns=[
-            'open_time', 'open', 'high', 'low', 'close', 'volume',
-            'close_time', 'quote_asset_volume', 'number_of_trades',
-            'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
-            ])
-            df_binance['open_time'] = pd.to_datetime(df_binance['open_time'], unit='ms')
-            df_binance.rename(columns={'open_time': 'datetime'}, inplace=True)
-            df_binance = df_binance[['datetime', 'open', 'low', 'high', 'close', 'volume']]
-
-            for col in ['open', 'high', 'low', 'close', 'volume']:
-               df_binance[col] = pd.to_numeric(df_binance[col], errors='coerce')
-
         else:
             binance=False
             df_bybit=bybit_fetcher.fetch_data(self.symbol,new_start_date,new_end_date)
