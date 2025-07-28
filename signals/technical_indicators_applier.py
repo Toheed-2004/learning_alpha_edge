@@ -1,10 +1,11 @@
 import talib
 import pandas as pd
 import os
+import inspect
 
 class TechnicalIndicatorApplier:
     def __init__(self, enabled_indicators):
-        self.enabled_indicators = [i.lower() for i in enabled_indicators]
+        self.randomly_enabled_indicators =enabled_indicators
         self.indicator_map = {
             # === Overlap Studies ===
             "sma": self._apply_sma,
@@ -153,103 +154,168 @@ class TechnicalIndicatorApplier:
             "var": lambda df: df.assign(VAR=talib.VAR(df["close"])),
         }
 
-    def apply(self, df: pd.DataFrame) -> pd.DataFrame:
+    def apply(self, df) -> pd.DataFrame:
         df = df.copy()
-        indicators_df = pd.DataFrame(index=df.index)
 
-        for name in self.enabled_indicators:
+        # Start with just OHLCV once
+        indicators_df = df[["open", "high", "low", "close", "volume"]].copy()
+        existing_cols = set(indicators_df.columns)
+
+        for name in self.randomly_enabled_indicators:
             func = self.indicator_map.get(name)
             if func:
-                temp_df = df.copy()
-                result_df = func(temp_df)
-                new_cols = [col for col in result_df.columns if col not in df.columns]
-                if new_cols:
-                    indicators_df = pd.concat([indicators_df, result_df[new_cols]], axis=1)
+                sig = inspect.signature(func)
+                params = sig.parameters
+
+                # Call the function with or without timeperiod
+                if len(params) >= 3:
+                    result_df = func(df.copy(), 20)
+                else:
+                    result_df = func(df.copy())
+
+                # Find only the new columns added by the indicator function
+                new_cols = set(result_df.columns) - existing_cols
+                new_data = result_df[list(new_cols)]
+
+                # Merge new indicator columns into indicators_df
+                indicators_df = pd.concat([indicators_df, new_data], axis=1)
+
+                # Update existing_cols so we don't keep collecting the same again
+                existing_cols.update(new_cols)
             else:
                 print(f"[WARN] No handler for indicator '{name}'")
 
         return indicators_df
 
     # === Overlap Studies ===
-    def _apply_sma(self, df): df["SMA_20"] = talib.SMA(df["close"], timeperiod=20); return df
-    def _apply_ema(self, df): df["EMA_20"] = talib.EMA(df["close"], timeperiod=20); return df
-    def _apply_wma(self, df): df["WMA_20"] = talib.WMA(df["close"], timeperiod=20); return df
-    def _apply_dema(self, df): df["DEMA_20"] = talib.DEMA(df["close"], timeperiod=20); return df
-    def _apply_tema(self, df): df["TEMA_20"] = talib.TEMA(df["close"], timeperiod=20); return df
-    def _apply_trima(self, df): df["TRIMA_20"] = talib.TRIMA(df["close"], timeperiod=20); return df
-    def _apply_kama(self, df): df["KAMA_20"] = talib.KAMA(df["close"], timeperiod=20); return df
-    def _apply_mama(self, df): m, f = talib.MAMA(df["close"]); df["MAMA"], df["FAMA"] = m, f; return df
-    def _apply_mavp(self, df): df["MAVP"] = talib.MAVP(df["close"], df["volume"], 2, 30); return df
-    def _apply_t3(self, df): df["T3_20"] = talib.T3(df["close"], timeperiod=20); return df
-    def _apply_sar(self, df): df["SAR"] = talib.SAR(df["high"], df["low"]); return df
-    def _apply_sarext(self, df): df["SAREXT"] = talib.SAREXT(df["high"], df["low"]); return df
-    def _apply_midpoint(self, df): df["MidPoint"] = talib.MIDPOINT(df["close"], timeperiod=14); return df
-    def _apply_midprice(self, df): df["MidPrice"] = talib.MIDPRICE(df["high"], df["low"], timeperiod=14); return df
-    def _apply_ht_trendline(self, df): df["HT_Trendline"] = talib.HT_TRENDLINE(df["close"]); return df
-    def _apply_bollinger_bands(self, df):
-        u, m, l = talib.BBANDS(df["close"], timeperiod=20)
+    def _apply_sma(self, df,timeperiod=20):
+         df["SMA_20"] = talib.SMA(df["close"], timeperiod) 
+         return df
+    def _apply_ema(self, df,timeperiod=20):
+         df["EMA_20"] = talib.EMA(df["close"], timeperiod)
+         return df
+    def _apply_wma(self, df,timeperiod=20):
+         df["WMA_20"] = talib.WMA(df["close"], timeperiod)
+         return df
+    def _apply_dema(self, df,timeperiod=20): 
+        df["DEMA_20"] = talib.DEMA(df["close"], timeperiod)
+        return df
+    def _apply_tema(self, df,timeperiod=20): 
+        df["TEMA_20"] = talib.TEMA(df["close"], timeperiod)
+        return df
+    def _apply_trima(self, df,timeperiod=20):
+         df["TRIMA_20"] = talib.TRIMA(df["close"], timeperiod)
+         return df
+    def _apply_kama(self, df,timeperiod=20):
+         df["KAMA_20"] = talib.KAMA(df["close"], timeperiod)
+         return df
+    def _apply_mama(self, df):
+         m, f = talib.MAMA(df["close"])
+         df["MAMA"], df["FAMA"] = m, f
+         return df
+    def _apply_mavp(self, df):
+         df["MAVP"] = talib.MAVP(df["close"], df["volume"], 2, 30)
+         return df
+    def _apply_t3(self, df,timeperiod=20):
+         df["T3_20"] = talib.T3(df["close"], timeperiod)
+         return df
+    def _apply_sar(self, df):
+         df["SAR"] = talib.SAR(df["high"], df["low"])
+         return df
+    def _apply_sarext(self, df):
+         df["SAREXT"] = talib.SAREXT(df["high"], df["low"])
+         return df
+    def _apply_midpoint(self, df,timeperiod=20):
+         df["MidPoint"] = talib.MIDPOINT(df["close"], timeperiod); return df
+    def _apply_midprice(self, df,timeperiod=20):
+         df["MidPrice"] = talib.MIDPRICE(df["high"], df["low"], timeperiod); return df
+    def _apply_ht_trendline(self, df):
+         df["HT_Trendline"] = talib.HT_TRENDLINE(df["close"]); return df
+    def _apply_bollinger_bands(self, df,timeperiod=20):
+        u, m, l = talib.BBANDS(df["close"], timeperiod)
         df["BB_upper"], df["BB_middle"], df["BB_lower"] = u, m, l
         return df
 
     # === Momentum Indicators ===
-    def _apply_adx(self, df): df["ADX_14"] = talib.ADX(df["high"], df["low"], df["close"], 14); return df
-    def _apply_adxr(self, df): df["ADXR_14"] = talib.ADXR(df["high"], df["low"], df["close"], 14); return df
-    def _apply_apo(self, df): df["APO"] = talib.APO(df["close"]); return df
-    def _apply_aroon(self, df):
-        down, up = talib.AROON(df["high"], df["low"], 14)
-        df["AROON_down"], df["AROON_up"] = down, up
+    def _apply_mfi(self, df, timeperiod=20):
+     df["MFI"] = talib.MFI(df["high"], df["low"], df["close"], df["volume"], timeperiod)
+     return df
+
+    def _apply_minus_di(self, df, timeperiod=20):
+        df["MINUS_DI"] = talib.MINUS_DI(df["high"], df["low"], df["close"], timeperiod)
         return df
-    def _apply_aroonosc(self, df): df["AROONOSC"] = talib.AROONOSC(df["high"], df["low"], 14); return df
-    def _apply_bop(self, df): df["BOP"] = talib.BOP(df["open"], df["high"], df["low"], df["close"]); return df
-    def _apply_cci(self, df): df["CCI_14"] = talib.CCI(df["high"], df["low"], df["close"], 14); return df
-    def _apply_cmo(self, df): df["CMO_14"] = talib.CMO(df["close"], 14); return df
-    def _apply_dx(self, df): df["DX"] = talib.DX(df["high"], df["low"], df["close"], 14); return df
-    def _apply_macd(self, df):
-        macd, sig, hist = talib.MACD(df["close"])
-        df["MACD"], df["MACD_signal"], df["MACD_hist"] = macd, sig, hist
+
+    def _apply_minus_dm(self, df, timeperiod=20):
+        df["MINUS_DM"] = talib.MINUS_DM(df["high"], df["low"], timeperiod)
         return df
-    def _apply_macdext(self, df):
-        macd, sig, hist = talib.MACDEXT(df["close"])
-        df["MACDEXT"], df["MACDEXT_signal"], df["MACDEXT_hist"] = macd, sig, hist
+
+    def _apply_mom(self, df, timeperiod=20):
+        df["MOM"] = talib.MOM(df["close"], timeperiod)
         return df
-    def _apply_macdfix(self, df):
-        macd, sig, hist = talib.MACDFIX(df["close"])
-        df["MACDFIX"], df["MACDFIX_signal"], df["MACDFIX_hist"] = macd, sig, hist
+
+    def _apply_plus_di(self, df, timeperiod=20):
+        df["PLUS_DI"] = talib.PLUS_DI(df["high"], df["low"], df["close"], timeperiod)
         return df
-    def _apply_mfi(self, df): df["MFI_14"] = talib.MFI(df["high"], df["low"], df["close"], df["volume"], 14); return df
-    def _apply_minus_di(self, df): df["MINUS_DI"] = talib.MINUS_DI(df["high"], df["low"], df["close"], 14); return df
-    def _apply_minus_dm(self, df): df["MINUS_DM"] = talib.MINUS_DM(df["high"], df["low"], 14); return df
-    def _apply_mom(self, df): df["MOM_10"] = talib.MOM(df["close"], 10); return df
-    def _apply_plus_di(self, df): df["PLUS_DI"] = talib.PLUS_DI(df["high"], df["low"], df["close"], 14); return df
-    def _apply_plus_dm(self, df): df["PLUS_DM"] = talib.PLUS_DM(df["high"], df["low"], 14); return df
-    def _apply_ppo(self, df): df["PPO"] = talib.PPO(df["close"]); return df
-    def _apply_roc(self, df): df["ROC"] = talib.ROC(df["close"], 10); return df
-    def _apply_rocp(self, df): df["ROCP"] = talib.ROCP(df["close"], 10); return df
-    def _apply_rocr(self, df): df["ROCR"] = talib.ROCR(df["close"], 10); return df
-    def _apply_rocr100(self, df): df["ROCR100"] = talib.ROCR100(df["close"], 10); return df
-    def _apply_rsi(self, df): df["RSI_14"] = talib.RSI(df["close"], 14); return df
+
+    def _apply_plus_dm(self, df, timeperiod=20):
+        df["PLUS_DM"] = talib.PLUS_DM(df["high"], df["low"], timeperiod)
+        return df
+
+    def _apply_ppo(self, df):
+        df["PPO"] = talib.PPO(df["close"])
+        return df  # PPO uses fast/slow periods by default internally
+
+    def _apply_roc(self, df, timeperiod=20):
+        df["ROC"] = talib.ROC(df["close"], timeperiod)
+        return df
+
+    def _apply_rocp(self, df, timeperiod=20):
+        df["ROCP"] = talib.ROCP(df["close"], timeperiod)
+        return df
+
+    def _apply_rocr(self, df, timeperiod=20):
+        df["ROCR"] = talib.ROCR(df["close"], timeperiod)
+        return df
+
+    def _apply_rocr100(self, df, timeperiod=20):
+        df["ROCR100"] = talib.ROCR100(df["close"], timeperiod)
+        return df
+
+    def _apply_rsi(self, df, timeperiod=20):
+        df["RSI"] = talib.RSI(df["close"], timeperiod)
+        return df
+
     def _apply_stoch(self, df):
         slowk, slowd = talib.STOCH(df["high"], df["low"], df["close"])
         df["STOCH_k"], df["STOCH_d"] = slowk, slowd
         return df
+
     def _apply_stochf(self, df):
         fastk, fastd = talib.STOCHF(df["high"], df["low"], df["close"])
         df["STOCHF_k"], df["STOCHF_d"] = fastk, fastd
         return df
+
     def _apply_stochrsi(self, df):
         fastk, fastd = talib.STOCHRSI(df["close"])
         df["STOCHRSI_k"], df["STOCHRSI_d"] = fastk, fastd
         return df
-    def _apply_trix(self, df): df["TRIX"] = talib.TRIX(df["close"], 14); return df
+
+    def _apply_trix(self, df, timeperiod=20):
+        df["TRIX"] = talib.TRIX(df["close"], timeperiod)
+        return df
+
     def _apply_ultosc(self, df):
         df["ULTOSC"] = talib.ULTOSC(df["high"], df["low"], df["close"])
+        return df  # ULTOSC has 3 timeperiods, so we keep the default
+
+    def _apply_willr(self, df, timeperiod=20):
+        df["WILLR"] = talib.WILLR(df["high"], df["low"], df["close"], timeperiod)
         return df
-    def _apply_willr(self, df): df["WILLR"] = talib.WILLR(df["high"], df["low"], df["close"], 14); return df
 
     def _apply_doji_pattern(self, df):
-        df["Doji"] = talib.CDLDOJI(df["open"], df["high"], df["low"], df["close"])
+        df["CDLDOJI"] = talib.CDLDOJI(df["open"], df["high"], df["low"], df["close"])
         return df
-    
+
     # === Volume Indicators ===
     def _apply_ad(self, df):
        df["AD"] = talib.AD(df["high"], df["low"], df["close"], df["volume"])
@@ -302,24 +368,90 @@ class TechnicalIndicatorApplier:
         return df
 
     # === Volatility Indicators ===
-    def _apply_atr(self, df):
-        df["ATR_14"] = talib.ATR(df["high"], df["low"], df["close"], timeperiod=14)
+    def _apply_atr(self, df,timeperiod=20):
+        df["ATR_14"] = talib.ATR(df["high"], df["low"], df["close"], timeperiod)
         return df
 
-    def _apply_natr(self, df):
-        df["NATR_14"] = talib.NATR(df["high"], df["low"], df["close"], timeperiod=14)
+    def _apply_natr(self, df,timeperiod=20):
+        df["NATR_14"] = talib.NATR(df["high"], df["low"], df["close"], timeperiod)
         return df
 
     def _apply_trange(self, df):
         df["TRANGE"] = talib.TRANGE(df["high"], df["low"], df["close"])
         return df
+    def _apply_adx(self, df,timeperiod=20):
+        df["ADX_14"] = talib.ADX(df["high"], df["low"], df["close"], timeperiod)
+        return df
+
+    def _apply_adxr(self, df,timeperiod=20):
+        df["ADXR_14"] = talib.ADXR(df["high"], df["low"], df["close"], timeperiod)
+        return df
+
+    def _apply_apo(self, df):
+        df["APO"] = talib.APO(df["close"], fastperiod=12, slowperiod=26, matype=0)
+        return df
+
+    def _apply_aroon(self, df,timeperiod=20):
+        aroon_down, aroon_up = talib.AROON(df["high"], df["low"], timeperiod)
+        df["AROON_down"] = aroon_down
+        df["AROON_up"] = aroon_up
+        return df
+
+    def _apply_aroonosc(self, df,timeperiod=20):
+        df["AROONOSC"] = talib.AROONOSC(df["high"], df["low"], timeperiod)
+        return df
+
+    def _apply_bop(self, df):
+        df["BOP"] = talib.BOP(df["open"], df["high"], df["low"], df["close"])
+        return df
+
+    def _apply_cci(self, df,timeperiod=20):
+        df["CCI_14"] = talib.CCI(df["high"], df["low"], df["close"], timeperiod)
+        return df
+
+    def _apply_cmo(self, df,timeperiod=20):
+        df["CMO_14"] = talib.CMO(df["close"], timeperiod)
+        return df
+
+    def _apply_dx(self, df,timeperiod=20):
+        df["DX_14"] = talib.DX(df["high"], df["low"], df["close"], timeperiod)
+        return df
+
+    def _apply_macd(self, df):
+        macd, signal, hist = talib.MACD(df["close"], fastperiod=12, slowperiod=26, signalperiod=9)
+        df["MACD"] = macd
+        df["MACD_signal"] = signal
+        df["MACD_hist"] = hist
+        return df
+
+    def _apply_macdext(self, df):
+        macd, signal, hist = talib.MACDEXT(
+            df["close"],
+            fastperiod=12,
+            fastmatype=0,
+            slowperiod=26,
+            slowmatype=0,
+            signalperiod=9,
+            signalmatype=0
+        )
+        df["MACDEXT"] = macd
+        df["MACDEXT_signal"] = signal
+        df["MACDEXT_hist"] = hist
+        return df
+
+    def _apply_macdfix(self, df):
+        macd, signal, hist = talib.MACDFIX(df["close"], signalperiod=9)
+        df["MACDFIX"] = macd
+        df["MACDFIX_signal"] = signal
+        df["MACDFIX_hist"] = hist
+        return df
 
 
-    @staticmethod
-    def save_to_csv(indicators_df: pd.DataFrame, exchange: str, symbol: str, output_dir="ti_output"):
-        os.makedirs(output_dir, exist_ok=True)
-        filename = f"{exchange}_{symbol}.csv"
-        path = os.path.join(output_dir, filename)
-        indicators_df.to_csv(path, index=False)
-        print(f"[INFO] Saved indicator data to {path}")
-        print(indicators_df.head())
+    # @staticmethod
+    # def save_to_csv(indicators_df: pd.DataFrame, exchange: str, symbol: str, output_dir="ti_output"):
+    #     os.makedirs(output_dir, exist_ok=True)
+    #     filename = f"{exchange}_{symbol}.csv"
+    #     path = os.path.join(output_dir, filename)
+    #     indicators_df.to_csv(path, index=True)
+    #     print(f"[INFO] Saved indicator data to {path}")
+    #     print(indicators_df.head())
