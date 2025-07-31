@@ -1,12 +1,7 @@
 import pandas as pd
-import sqlite3
+from sqlalchemy import create_engine
 
-
-def preprocess_klines(df, interpolate_method='linear', fill_zero_volume='ffill'):
-    """
-    Applies interpolation and volume cleaning on already-processed kline DataFrame.
-    Assumes datetime conversion and numeric casting are already done.
-    """
+def preprocess_klines(df:pd.DataFrame, interpolate_method='linear', fill_zero_volume='ffill'):
     numeric_cols = ['open', 'high', 'low', 'close', 'volume']
 
     # Interpolate missing values
@@ -21,38 +16,38 @@ def preprocess_klines(df, interpolate_method='linear', fill_zero_volume='ffill')
         df = df[df['volume'] != 0]
 
     # Drop any remaining NaNs
-    df.dropna(inplace=True)# setting inplace=true does not return a new data-frame and replaces the original one/caller data-frame
+    df.dropna(inplace=True)
 
-    # Optional: Round again if needed
-    df[numeric_cols] = df[numeric_cols].round(2)
-    df[numeric_cols] = df[numeric_cols].astype('float64')
-
+    # Round and enforce float64
+    df[numeric_cols] = df[numeric_cols].round(2).astype('float64')
     return df
 
-def resample_ohlcv_data(db_path, table_name, new_interval):#ohlcv=open,high,low,close,volume
+
+def resample_ohlcv_data(df: pd.DataFrame, new_interval: str) -> pd.DataFrame:
     """
-    Resample OHLCV data from SQLite DB to a higher interval.
+    Resample a clean OHLCV DataFrame to a higher timeframe.
     
     Args:
-        db_path (str): Path to the SQLite database.
-        table_name (str): Table to fetch 1m data from.
-        new_interval (str): Pandas-compatible resample interval (e.g., '4min', '15min', '1H').
+        df (pd.DataFrame): DataFrame with datetime index and OHLCV columns.
+        new_interval (str): Pandas-compatible resample interval (e.g., '15min', '1H').
 
     Returns:
         pd.DataFrame: Resampled OHLCV data.
     """
-    # Load data
-    with sqlite3.connect(db_path) as conn:
-        df = pd.read_sql(f"SELECT * FROM '{table_name}'", conn, parse_dates=['datetime'])
 
     if df.empty:
-        print(f"[WARN] Table '{table_name}' is empty.")
+        print("[WARN] Input DataFrame is empty.")
         return df
 
-    # Set datetime as index for resampling
-    df.set_index('datetime', inplace=True)
+    # Ensure datetime column is datetime and set as index
+    if 'datetime' in df.columns:
+        df['datetime'] = pd.to_datetime(df['datetime'], errors='coerce')
+        df = df.set_index('datetime')
 
-    # Resample using appropriate aggregation
+    # Sort and drop any NaT values
+    df = df.sort_index()
+    df = df[~df.index.isnull()]
+
     ohlcv_resampled = df.resample(new_interval).agg({
         'open': 'first',
         'high': 'max',
@@ -61,8 +56,5 @@ def resample_ohlcv_data(db_path, table_name, new_interval):#ohlcv=open,high,low,
         'volume': 'sum'
     })
 
-    # Drop NaN rows (may happen if interval causes gaps)
-    ohlcv_resampled.dropna(inplace=True)
-
-    ohlcv_resampled.reset_index(inplace=True)
+    ohlcv_resampled = ohlcv_resampled.dropna().reset_index()
     return ohlcv_resampled

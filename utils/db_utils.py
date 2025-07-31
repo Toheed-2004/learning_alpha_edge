@@ -1,33 +1,73 @@
-# utils/db_utils.py
-import sqlite3
-def save_to_db(df, db_path, table_name):
+from sqlalchemy import create_engine, text,Engine
+import pandas as pd
+
+
+def get_pg_engine(user, password, host, port, dbname):
+    return create_engine(f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{dbname}")
+
+
+def save_to_db(df:pd.DataFrame, engine:Engine, schema:str, table_name:str):
     """
-    Save the DataFrame to a SQLite3 database table.
-    - If table exists, it will be replaced.
+    Save DataFrame to a PostgreSQL table inside a specific schema.
+    - Appends if table exists, creates otherwise.
     """
-    
-    
-    with sqlite3.connect(db_path) as conn:
-        df.to_sql(table_name, conn, if_exists='append', index=False)
-    print(f"[INFO] Saved data to table: {table_name}")
+    df.to_sql(
+        name=table_name,
+        con=engine,
+        schema=schema,
+        if_exists='append',
+        index=False
+    )
+    print(f"[INFO] Saved data to {schema}.{table_name}")
 
-def drop_table(db_path, table_name):
-    with sqlite3.connect(db_path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
-        print(f"[INFO] Dropped table: {table_name}")
 
-def drop_all_tables(db_path):
-    with sqlite3.connect(db_path) as conn:
-        cursor = conn.cursor()
+def drop_table(engine:Engine, schema, table_name):
+    """
+    Drop a specific table in a given schema.
+    """
+    with engine.connect() as conn:
+        conn.execute(text(f'DROP TABLE IF EXISTS "{schema}"."{table_name}" CASCADE'))
+        print(f"[INFO] Dropped table: {schema}.{table_name}")
 
-        # Get list of all tables in the database
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-        tables = cursor.fetchall()
+
+def drop_all_tables(engine:Engine, schema):
+    """
+    Drop all tables within a given schema.
+    """
+    with engine.connect() as conn: # Use engine.begin() for auto-committing transactions
+        result = conn.execute(text(
+            "SELECT tablename FROM pg_tables WHERE schemaname = :schema"
+        ), {"schema": schema})
+        tables = result.fetchall()
 
         for (table_name,) in tables:
-            # Properly quote the table name in SQL
-            cursor.execute(f'DROP TABLE IF EXISTS "{table_name}"')
-            print(f"[INFO] Dropped table: '{table_name}'")
-if __name__=="__main__":
-    drop_all_tables(db_path=r"D:\learning_alpha_edge\db\market_data.db")
+            conn.execute(text(f'DROP TABLE IF EXISTS "{schema}"."{table_name}" CASCADE'))
+            print(f"[INFO] Dropped table: {schema}.{table_name}")
+            conn.commit()
+
+
+def ensure_schema_exists(engine:Engine, schema):
+    """
+    Create the schema if it doesn't exist.
+    """
+    with engine.connect() as conn:
+        conn = conn.execution_options(isolation_level="AUTOCOMMIT")
+        conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema}"'))
+        print(f"[INFO] Ensured schema exists: {schema}")
+
+
+# Example usage
+if __name__ == "__main__":
+    engine = get_pg_engine(
+        user="postgres",
+        password="Afridi11",
+        host="localhost",
+        port="5432",
+        dbname="db"
+    )
+    schema = ["public","signals"]
+    for schema_name in schema:
+        drop_all_tables(engine, schema_name)
+
+
+    
