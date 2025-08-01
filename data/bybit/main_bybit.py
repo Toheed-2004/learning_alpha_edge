@@ -1,18 +1,20 @@
+# main_bybit.py
+
 import os
 import sys
 import datetime
 import configparser
 import pandas as pd
 
-from learning_alpha_edge.utils.db_utils import save_to_db
+from learning_alpha_edge.utils.db_utils import (
+    get_pg_engine,
+    save_to_db,
+    ensure_schema_exists
+)
 from learning_alpha_edge.data.bybit.bybit_fetcher import fetch_data
-from learning_alpha_edge.utils.data_utils import preprocess_klines, resample_ohlcv_data
+from learning_alpha_edge.utils.data_utils import preprocess_klines
 
-# Base directory and DB path
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
-db_path = os.path.join(BASE_DIR, 'db', 'market_data.db')
-print("[INFO] DB Path:", db_path)
-
+# Load config
 def load_config(path='config_bybit.ini'):
     config = configparser.ConfigParser()
     config.read(path)
@@ -21,7 +23,22 @@ def load_config(path='config_bybit.ini'):
 if __name__ == '__main__':
     config = load_config()
     cfg = config['data']
+    db_cfg = config['postgres']
 
+    # Create PostgreSQL engine
+    engine = get_pg_engine(
+        user=db_cfg.get('user'),
+        password=db_cfg.get('password'),
+        host=db_cfg.get('host'),
+        port=db_cfg.get('port'),
+        dbname=db_cfg.get('dbname')
+    )
+
+    # Define schema for Bybit
+    schema = 'bybit'
+    ensure_schema_exists(engine, schema)
+
+    # Parse config
     symbols = [s.strip().upper() + 'USDT' for s in cfg.get('symbols').split(',')]
     start_date = datetime.datetime.strptime(cfg.get('start_date'), "%Y-%m-%d")
     end_date = datetime.datetime.now() if cfg.get('end_date') == 'now' else datetime.datetime.strptime(cfg.get('end_date'), "%Y-%m-%d")
@@ -32,27 +49,22 @@ if __name__ == '__main__':
     for symbol in symbols:
         print(f"[INFO] Fetching {symbol} from Bybit...")
         df = fetch_data(symbol, start_date, end_date)
-        
-        print(df['open_time'].head())
-        print(df['open_time'].dtype)
-        # df['open_time'] = pd.to_datetime(pd.to_numeric(df['open_time'], errors='coerce'), unit='ms')
-        print("[DEBUG] Columns before rename:", df.columns.tolist())
 
+        if df.empty:
+            print(f"[WARN] No data for {symbol}, skipping.")
+            continue
+
+        # Prepare DataFrame
         df.rename(columns={'open_time': 'datetime'}, inplace=True)
         df = df[['datetime', 'open', 'high', 'low', 'close', 'volume']]
-        
-
         for col in ['open', 'high', 'low', 'close', 'volume']:
             df[col] = pd.to_numeric(df[col], errors='coerce')
-        # print(df.shape)
-        # print(df.head())   
 
         df = preprocess_klines(df, interpolate_method, fill_zero_volume)
 
         base_symbol = symbol.replace('USDT', '').lower()
-        table_name = f"bybit_{base_symbol}_1min"
-        
+        table_name = f"{base_symbol}_{interval}"
 
-        save_to_db(df, db_path, table_name)
+        save_to_db(df, engine, schema, table_name)
 
-        print(f"[INFO] {symbol} saved to {table_name}")
+        print(f"[INFO] {symbol} saved to {schema}.{table_name}")

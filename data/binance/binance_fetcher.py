@@ -3,7 +3,9 @@ import pandas as pd
 import os
 import time
 import datetime
+import psycopg2
 from binance.client import Client
+
 
 # Set up client (assumes env vars are set)
 api_key = os.getenv('BINANCE_API_KEY')
@@ -12,10 +14,10 @@ if not api_key or not api_secret:
     raise EnvironmentError("Missing Binance API credentials.")
 client = Client(api_key, api_secret)
 
-def date_to_milliseconds(dt):
+def date_to_milliseconds(dt:datetime.datetime):
     return int(dt.timestamp() * 1000)
 
-def fetch_data(symbol, start_date, end_date):
+def fetch_data(symbol, start_date, end_date,interval="1m"):
     """Fetch historical klines for a single symbol"""
     print(f"[INFO]Fetching Data from {start_date} TO {end_date}")
     all_klines = []
@@ -26,7 +28,7 @@ def fetch_data(symbol, start_date, end_date):
     while start_ts < end_ts:
         klines = client.get_historical_klines(
             symbol=symbol,
-            interval=Client.KLINE_INTERVAL_1MINUTE,
+            interval=interval,
             start_str=start_ts,
             end_str=end_ts,
             limit=limit
@@ -55,5 +57,9 @@ def fetch_data(symbol, start_date, end_date):
             df[col] = pd.to_numeric(df[col], errors='coerce')
     df = df[['datetime', 'open', 'high', 'low', 'close', 'volume']]
     return df
-        
+if __name__=="__main__":
+     start_date=datetime.datetime.strptime(('2025-07-01'), "%Y-%m-%d")
+     end_date=datetime.datetime.strptime('2025-07-31', "%Y-%m-%d")
+     df=fetch_data('BTCUSDT',start_date,end_date)
+     df.to_csv('testoutput.csv',index=False)
 

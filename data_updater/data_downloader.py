@@ -1,81 +1,80 @@
-import sqlite3
 import pandas as pd
-import os
 from datetime import datetime
+from sqlalchemy import text
 from learning_alpha_edge.data.binance import binance_fetcher
-from learning_alpha_edge.utils import data_utils
 from learning_alpha_edge.data.bybit import bybit_fetcher
+from learning_alpha_edge.utils import data_utils
+import sqlalchemy
+from sqlalchemy import Engine
 
 class Data_Downloader:
-    def __init__(self, symbol: str, exchange: str, resample_to: str):
-        print('[INFO]IN update class constructor')  
-        BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '../'))
-        self.db_path=os.path.join(BASE_DIR,'db','market_data.db')
-        print(self.db_path)
-        self.symbol = f"{symbol.upper()}USDT"
-        self.base_symbol=self.symbol.replace("USDT","").lower()
+    def __init__(self, symbol: str, exchange: str, resample_to: str, engine:Engine, schema: str):
+        print('[INFO] In PostgreSQL Data_Downloader constructor')
+        self.symbol = symbol
+        self.base_symbol = self.symbol.replace("USDT", "").lower()
         self.exchange = exchange.lower()
         self.resample_to = resample_to
-        self.table_name = f"{self.exchange}_{self.base_symbol}_1min"
-        self.full_df=None 
-        self.resampled_df=None
+        self.table_name = f"{self.base_symbol}_1m"
+        self.schema = schema
+        self.engine = engine
+        self.full_df = None
+        self.resampled_df = None
         self._update()
-        klines=None
-    
+
     def _update(self):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
         # Get latest datetime from table
-        cursor.execute(f"SELECT MAX(datetime) FROM {self.table_name}")
-        result = cursor.fetchone()
-        conn.close()
-        new_start_date = pd.to_datetime(result[0]) # New start date is set to the current maximum date.
-        # new_end_date = datetime.now() 
-        new_end_date=datetime.now()
-               
+        with self.engine.connect() as conn:
+            result = conn.execute(
+            text(f'SELECT MAX("datetime") FROM "{self.exchange}"."{self.table_name}"')
+            ).fetchone()
+
+            
+
+        new_start_date = pd.to_datetime(result[0]) if result[0] else pd.Timestamp("2020-01-01")
+        new_end_date = datetime.now()
+
         # Fetch new data
-        if(self.exchange=='binance'):
-            binance=True
-            df_binance= binance_fetcher.fetch_data(self.symbol,new_start_date,new_end_date)
-            if df_binance.empty:
-             print(f"[INFO] No new data for {self.symbol}")
-             return
+        if self.exchange == 'binance':
+            df = binance_fetcher.fetch_data(self.symbol, new_start_date, new_end_date)
         else:
-            binance=False
-            df_bybit=bybit_fetcher.fetch_data(self.symbol,new_start_date,new_end_date)
-            df_bybit.rename(columns={'open_time': 'datetime'}, inplace=True)
-            df_bybit = df_bybit[['datetime', 'open', 'high', 'low', 'close', 'volume']]
-
+            df = bybit_fetcher.fetch_data(self.symbol, new_start_date, new_end_date)
+            df.rename(columns={'open_time': 'datetime'}, inplace=True)
+            df = df[['datetime', 'open', 'high', 'low', 'close', 'volume']]
             for col in ['open', 'high', 'low', 'close', 'volume']:
-               df_bybit[col] = pd.to_numeric(df_bybit[col], errors='coerce')
+                df[col] = pd.to_numeric(df[col], errors='coerce')
 
-        
+        if df.empty:
+            print(f"[INFO] No new data for {self.symbol}")
+            return
+
         # Preprocess
-        interpolate_method = 'linear'
-        fill_zero_volume = 'ffill'
-        
-        if binance:
-             df_binance = data_utils.preprocess_klines(df_binance, interpolate_method, fill_zero_volume)
-        else:
-             df_bybit = data_utils.preprocess_klines(df_bybit, interpolate_method, fill_zero_volume)
+        df = data_utils.preprocess_klines(df, interpolate_method='linear', fill_zero_volume='ffill')
+        df["datetime"] = df["datetime"].dt.strftime("%Y-%m-%d %H:%M:%S")
 
+        # Save to PostgreSQL
+        df.to_sql(
+            self.table_name,
+            self.engine,
+            schema=self.schema,
+            if_exists='append',
+            index=False,
+            method='multi',
+            chunksize=1000
+        )
 
-       
-        # Save new data to DB
-        conn = sqlite3.connect(self.db_path)
-        
-        df_binance.to_sql(self.table_name, conn, if_exists='append', index=False) if binance else df_bybit.to_sql(self.table_name, conn, if_exists='append', index=False)
-        query = f"SELECT * FROM {self.table_name} ORDER BY datetime ASC"
-        self.full_df = pd.read_sql(query, conn, parse_dates=['datetime'])
-        self.resampled_df=data_utils.resample_ohlcv_data(self.db_path,self.table_name,self.resample_to)
-        conn.close()
+        # Read full and resampled data
+        query = f'SELECT * FROM "{self.schema}"."{self.table_name}" ORDER BY datetime ASC'
+        self.full_df = pd.read_sql(query, self.engine)
+        self.full_df['datetime'] = pd.to_datetime(self.full_df['datetime'])
+
+        self.resampled_df = data_utils.resample_ohlcv_data(self.full_df, self.resample_to)
+
     def get_data(self):
         return self.full_df, self.resampled_df
 
-        
-
-        
 
 if __name__ == '__main__':
-    updater = Data_Downloader( 'btc', 'bybit', '3min') # Also updates the corresponding db table to datetime.Now()
-    
+    from sqlalchemy import create_engine
+    # Example engine creation; replace with your actual DB info
+    engine = create_engine("postgresql+psycopg2://username:password@localhost:5432/your_dbname")
+    downloader = Data_Downloader('btc', 'bybit', '3min', engine=engine, schema='bybit')

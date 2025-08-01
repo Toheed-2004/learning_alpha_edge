@@ -11,7 +11,7 @@ session = HTTP(api_key=api_key, api_secret=api_secret)
 def date_to_milliseconds(dt):
     return int(dt.timestamp() * 1000)
 
-def fetch_data(symbol, start_date, end_date) -> pd.DataFrame:
+def fetch_data(symbol, start_date, end_date,interval="1") -> pd.DataFrame:
     print(f"[INFO] Fetching Bybit data for {symbol} from {start_date} to {end_date}")
 
     start_ts = date_to_milliseconds(start_date)
@@ -24,7 +24,7 @@ def fetch_data(symbol, start_date, end_date) -> pd.DataFrame:
         
             category="linear",
             symbol=symbol.upper(),
-            interval="1",
+            interval=interval,
             start=start_ts,
             end=end_date,
             limit=1000
