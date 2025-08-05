@@ -1,107 +1,133 @@
 import pandas as pd
+from learning_alpha_edge.data.binance.main_binance import load_config
+from learning_alpha_edge.utils.db_utils import get_pg_engine
+import os
+
 
 class Backtester:
- def __init__(self, signal_df: pd.DataFrame, data_df: pd.DataFrame, start_balance=1000, takeprofit=0.05, stoploss=0.03, fees=0.05):
-    self.signal_df = signal_df.copy()
-    self.data_df = data_df.copy()
+    def __init__(self, signal_df:pd.DataFrame, data_df:pd.DataFrame, start_balance=1000, takeprofit=0.05, stoploss=0.03, fees=0.0005):
+        self.signal_df = signal_df.set_index("datetime")
+        self.data_df = data_df.set_index("datetime")
+        self.df = self.data_df.join(self.signal_df["signal"], how="inner").dropna()
+        
+        self.start_balance = start_balance
+        self.takeprofit = takeprofit
+        self.stoploss = stoploss
+        self.fees = fees
+        self.ledger = []
 
-    # Make sure both are datetime and localized
-    self.signal_df['datetime'] = pd.to_datetime(self.signal_df['datetime']).dt.tz_localize('UTC')
-    self.data_df['datetime'] = pd.to_datetime(self.data_df['datetime']).dt.tz_localize('UTC')
+    def run_backtest(self):
+        position = None
+        entry_price = 0
+        balance = self.start_balance
+        cumulative_pnl = 0
 
-    # Set index
-    self.signal_df = self.signal_df.set_index("datetime")
-    self.data_df = self.data_df.set_index("datetime")
+        for dt, row in self.df.iterrows():
+            signal = row["signal"]
+            open_price = row["open"]
+            high = row["high"]
+            low = row["low"]
+            close_price = row["close"]
 
-    # Now join works fine
-    self.df = self.data_df.join(self.signal_df[["signal"]], how="inner")
+            # Check if a position is already open
+            if position == "long":
+                tp_price = entry_price * (1 + self.takeprofit)
+                sl_price = entry_price * (1 - self.stoploss)
 
-    self.balance = start_balance
-    self.takeprofit = takeprofit
-    self.stoploss = stoploss
-    self.fees = fees
-    self.ledger = []
+                # Check for TP/SL hits
+                if high >= tp_price:
+                    sell_price = tp_price
+                    pnl = (sell_price - entry_price) - (entry_price * self.fees) - (sell_price * self.fees)
+                    balance += pnl
+                    cumulative_pnl += pnl
+                    self.ledger.append([dt, "TP-Sell", entry_price, sell_price, balance, pnl, cumulative_pnl])
+                    position = None
+                    entry_price = 0
+                elif low <= sl_price:
+                    sell_price = sl_price
+                    pnl = (sell_price - entry_price) - (entry_price * self.fees) - (sell_price * self.fees)
+                    balance += pnl
+                    cumulative_pnl += pnl
+                    self.ledger.append([dt, "SL-Sell", entry_price, sell_price, balance, pnl, cumulative_pnl])
+                    position = None
+                    entry_price = 0
+                elif signal == -1:
+                    sell_price = open_price
+                    pnl = (sell_price - entry_price) - (entry_price * self.fees) - (sell_price * self.fees)
+                    balance += pnl
+                    cumulative_pnl += pnl
+                    self.ledger.append([dt, "Signal-Sell", entry_price, sell_price, balance, pnl, cumulative_pnl])
+                    position = "short"
+                    entry_price = open_price
+                    balance -= open_price * self.fees
+                    self.ledger.append([dt, "Open-Short", None, open_price, balance, 0, cumulative_pnl])
 
- def run(self):
-    position = 0  # 1 = long, -1 = short
-    entry_price = None
-    entry_time = None
-    cumulative_pnl = 0
-    self.ledger = []
+            elif position == "short":
+                tp_price = entry_price * (1 - self.takeprofit)
+                sl_price = entry_price * (1 + self.stoploss)
 
-    for i in range(len(self.df)):
-        row = self.df.iloc[i]
-        signal = row["signal"]
-        price = row["close"]
-        timestamp = row.name
+                if low <= tp_price:
+                    buy_price = tp_price
+                    pnl = (entry_price - buy_price) - (entry_price * self.fees) - (buy_price * self.fees)
+                    balance += pnl
+                    cumulative_pnl += pnl
+                    self.ledger.append([dt, "TP-Buy", buy_price, entry_price, balance, pnl, cumulative_pnl])
+                    position = None
+                    entry_price = 0
+                elif high >= sl_price:
+                    buy_price = sl_price
+                    pnl = (entry_price - buy_price) - (entry_price * self.fees) - (buy_price * self.fees)
+                    balance += pnl
+                    cumulative_pnl += pnl
+                    self.ledger.append([dt, "SL-Buy", buy_price, entry_price, balance, pnl, cumulative_pnl])
+                    position = None
+                    entry_price = 0
+                elif signal == 1:
+                    buy_price = open_price
+                    pnl = (entry_price - buy_price) - (entry_price * self.fees) - (buy_price * self.fees)
+                    balance += pnl
+                    cumulative_pnl += pnl
+                    self.ledger.append([dt, "Signal-Buy", buy_price, entry_price, balance, pnl, cumulative_pnl])
+                    position = "long"
+                    entry_price = open_price
+                    balance -= open_price * self.fees
+                    self.ledger.append([dt, "Open-Long", open_price, None, balance, 0, cumulative_pnl])
 
-        # EXIT logic first (always evaluate if we're in a trade)
-        if position != 0:
-            change = (price - entry_price) / entry_price if position == 1 else (entry_price - price) / entry_price
-            tp_hit = change >= self.takeprofit
-            sl_hit = change <= -self.stoploss
-            exit_signal = signal != position and signal != 0
-            exit_condition = tp_hit or sl_hit or exit_signal
+            else:
+                # No position open
+                if signal == 1:
+                    position = "long"
+                    entry_price = open_price
+                    balance -= open_price * self.fees
+                    self.ledger.append([dt, "Open-Long", open_price, None, balance, 0, cumulative_pnl])
+                elif signal == -1:
+                    position = "short"
+                    entry_price = open_price
+                    balance -= open_price * self.fees
+                    self.ledger.append([dt, "Open-Short", None, open_price, balance, 0, cumulative_pnl])
 
-            if exit_condition:
-                raw_pnl = change
-                net_pnl = raw_pnl - 2 * self.fees
-                pnl_amount = self.balance * net_pnl
-                self.balance += pnl_amount
-                cumulative_pnl += pnl_amount
+        return pd.DataFrame(self.ledger, columns=["datetime", "Action", "Buy_price", "Sell_price", "balance", "pnl", "pnl_sum"])
 
-                self.ledger.append({
-                    "datetime": timestamp,
-                    "action": "sell" if position == 1 else "cover",
-                    "buy_price": entry_price if position == 1 else price,
-                    "sell_price": price if position == 1 else entry_price,
-                    "balance": round(self.balance, 2),
-                    "pnl": round(pnl_amount, 2),
-                    "cumulative_pnl": round(cumulative_pnl, 2)
-                })
+if __name__ == "__main__":
+        config_path=os.path.dirname(os.path.abspath(__file__))
+        config_path=os.path.join(config_path,"backtest_config.ini")
+        config = load_config(config_path)
+        print(config.sections())
+        db_cfg = config['postgres']
+        engine = get_pg_engine(
+            user=db_cfg.get('user'),
+            password=db_cfg.get('password'),
+            host=db_cfg.get('host'),
+            port=db_cfg.get('port'),
+            dbname=db_cfg.get('dbname')
+        )
+        with engine.begin() as conn:
+         signal_df = pd.read_sql('SELECT * FROM "signals"."strategy_0_84c9f029"', conn)
 
-                # Reset position
-                position = 0
-                entry_price = None
-                entry_time = None
+         data_df = pd.read_sql('SELECT * FROM "binance"."btc_1m"', conn)
+        backtester = Backtester(signal_df=signal_df, data_df=data_df, start_balance=1000)
+        ledger=backtester.run_backtest()
+        ledger.to_csv("ledger.csv")
 
-        # ENTRY logic (after potential exit)
-        if position == 0 and signal != 0:
-            position = signal
-            entry_price = price
-            entry_time = timestamp
 
-            self.ledger.append({
-                "datetime": timestamp,
-                "action": "buy" if signal == 1 else "short",
-                "buy_price": price if signal == 1 else None,
-                "sell_price": None if signal == 1 else price,
-                "balance": round(self.balance, 2),
-                "pnl": None,
-                "cumulative_pnl": round(cumulative_pnl, 2)
-            })
 
-    # Final exit if still in position
-    if position != 0:
-        final_row = self.df.iloc[-1]
-        final_price = final_row["close"]
-        final_time = final_row.name
-
-        change = (final_price - entry_price) / entry_price if position == 1 else (entry_price - final_price) / entry_price
-        raw_pnl = change
-        net_pnl = raw_pnl - 2 * self.fees
-        pnl_amount = self.balance * net_pnl
-        self.balance += pnl_amount
-        cumulative_pnl += pnl_amount
-
-        self.ledger.append({
-            "datetime": final_time,
-            "action": "final_sell" if position == 1 else "final_cover",
-            "buy_price": entry_price if position == 1 else final_price,
-            "sell_price": final_price if position == 1 else entry_price,
-            "balance": round(self.balance, 2),
-            "pnl": round(pnl_amount, 2),
-            "cumulative_pnl": round(cumulative_pnl, 2)
-        })
-
-    return pd.DataFrame(self.ledger)

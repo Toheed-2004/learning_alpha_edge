@@ -11,7 +11,7 @@ from learning_alpha_edge.data_updater.data_downloader import Data_Downloader
 from learning_alpha_edge.signals.technical_indicators_signals.signals_generator import generate_signals
 from learning_alpha_edge.technical_indicators.ti  import * 
 from sqlalchemy import create_engine, inspect as sql_inspect, text
-from learning_alpha_edge.backtest.main_backtest import Backtester 
+# from learning_alpha_edge.backtest.main_backtest import Backtester 
 
 # Randomly enable indicators (True/False)
 def randomly_select_indicators(indicator_map):
@@ -122,11 +122,6 @@ def add_timeperiod_columns_for_indicators(engine,indicator_map, table_name="conf
 
 # Run the pipeline
 if __name__ == "__main__":
-    for name in talib.get_functions():
-        func=getattr(talib,name)
-        sig=inspect.signature(func)
-        if 'timeperiod' in sig.parameters:
-            print(name)
     config_path=os.path.dirname(os.path.abspath(__file__))
     config_path=os.path.join(config_path,"signals_config.ini")
     config = load_config(config_path)
@@ -142,7 +137,6 @@ if __name__ == "__main__":
     )
 
     
-
     exchanges = [ex.strip().lower() for ex in cfg.get('exchanges').split(',')]
     symbols_base = [s.strip().upper() for s in cfg.get('symbols').split(',')]
     start_date = datetime.datetime.strptime(cfg.get('start_date'), "%Y-%m-%d")
@@ -164,8 +158,8 @@ if __name__ == "__main__":
             schema = exchange.lower()  # 'binance' or 'bybit'
             downloader = Data_Downloader(symbol=symbol, exchange=exchange, resample_to=interval, engine=engine, schema=schema)
             df, resampled_df = downloader.get_data()
-            df = pd.read_sql(f'SELECT * FROM "binance"."btc_1m" ORDER BY datetime', engine)
-            df['datetime']=pd.to_datetime(df['datetime'])
+            # resampled_df = pd.read_sql(f'SELECT * FROM "binance"."btc_1m" ORDER BY datetime', engine)
+            resampled_df['datetime']=pd.to_datetime(resampled_df['datetime'])
 
             if resampled_df is None or resampled_df.empty:
                 print(f"[WARN] No data found for {symbol} on {exchange} at {interval}")
@@ -178,10 +172,10 @@ if __name__ == "__main__":
                 raw_string = f"{exchange}_{symbol}_{interval}_{i}_{datetime.datetime.now().isoformat()}"
                 strategy_hash = hashlib.sha256(raw_string.encode()).hexdigest()[:8]  # shorten for readability
                 strategy_name = f"strategy_{i}_{strategy_hash}"               
-                print(type(df))
-                df_with_indicators = apply_indicators(df.copy(), selected_indicators,indicator_timeperiods)
+                df_with_indicators = apply_indicators(resampled_df.copy(), selected_indicators,indicator_timeperiods)
                 signal_df = generate_signals(df_with_indicators, selected_indicators)
                 signal_df = majority_vote(signal_df)
+                signal_df["datetime"] = signal_df["datetime"].dt.strftime("%Y-%m-%d %H:%M:%S")
 
                 save_strategy_to_db(
                     engine, strategy_name, base_symbol, interval, exchange,
@@ -191,17 +185,10 @@ if __name__ == "__main__":
                 save_signals(engine, strategy_name, signal_df[['datetime','signal']])
                 signal_df=pd.read_sql(f'SELECT * FROM "signals"."{strategy_name}" ORDER BY datetime', engine)
                 signal_df['datetime']=pd.to_datetime(signal_df['datetime'])
+                
 
-                bt = Backtester(
-                    signal_df,
-                    data_df=df,
-                    start_balance=1000,
-                    takeprofit=0.05,   # 5%
-                    stoploss=0.03,     # 3%
-                    fees=0.0005        # 0.05%
-                )
+               
 
-                ledger_df = bt.run()
-                ledger_df.to_csv("backtest_ledger.csv", index=False)
 
+                
     
