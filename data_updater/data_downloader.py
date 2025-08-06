@@ -76,5 +76,5 @@ class Data_Downloader:
 if __name__ == '__main__':
     from sqlalchemy import create_engine
     # Example engine creation; replace with your actual DB info
-    engine = create_engine("postgresql+psycopg2://username:password@localhost:5432/your_dbname")
-    downloader = Data_Downloader('btc', 'bybit', '3min', engine=engine, schema='bybit')
+    engine = create_engine("postgresql+psycopg2://postgres:Afridi11@localhost:5432/db")
+    downloader = Data_Downloader('BTCUSDT', 'binance', '3min', engine=engine, schema='binance')

@@ -64,6 +64,7 @@ if __name__ == '__main__':
 
         base_symbol = symbol.replace('USDT', '').lower()
         table_name = f"{base_symbol}_{interval}"
+        df["datetime"] = df["datetime"].dt.strftime("%Y-%m-%d %H:%M:%S")
 
         save_to_db(df, engine, schema, table_name)
 

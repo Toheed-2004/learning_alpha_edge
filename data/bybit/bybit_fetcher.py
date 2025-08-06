@@ -2,13 +2,13 @@
 import os
 import time
 import pandas as pd
-from datetime import datetime
+import datetime
 from pybit.unified_trading import HTTP
 
 api_key = os.getenv("BYBIT_API_KEY")
 api_secret = os.getenv("BYBIT_SECRET_KEY")
 session = HTTP(api_key=api_key, api_secret=api_secret)
-def date_to_milliseconds(dt):
+def date_to_milliseconds(dt:datetime.datetime):
     return int(dt.timestamp() * 1000)
 
 def fetch_data(symbol, start_date, end_date,interval="1") -> pd.DataFrame:
