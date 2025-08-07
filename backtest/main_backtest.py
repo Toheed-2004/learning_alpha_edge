@@ -5,7 +5,7 @@ import os
 
 
 class Backtester:
-    def __init__(self, signal_df:pd.DataFrame, data_df:pd.DataFrame, start_balance=1000, takeprofit=0.05, stoploss=0.03, fees=0.0005):
+    def __init__(self, signal_df:pd.DataFrame, data_df:pd.DataFrame, start_balance=1000, takeprofit=5, stoploss=3, fees=0.05):
         self.signal_df = signal_df.set_index("datetime")
         self.data_df = data_df.set_index("datetime")
         self.df = self.data_df.copy()
@@ -32,100 +32,129 @@ class Backtester:
 
             predicted_direction = "Long" if signal == 1 else ("Short" if signal == -1 else None)
 
+            fee_rate = self.fees / 100
+            tp_pct = self.takeprofit / 100
+            sl_pct = self.stoploss / 100
+
+            # ---------------------- LONG POSITION ----------------------
             if position == "long":
-                tp_price = entry_price * (1 + self.takeprofit)
-                sl_price = entry_price * (1 - self.stoploss)
+                tp_price = entry_price * (1 + tp_pct)
+                sl_price = entry_price * (1 - sl_pct)
 
                 if high >= tp_price:
-                    exit_price = tp_price
-                    pnl = ((exit_price-entry_price)/entry_price)
-                    profit=self.balance*pnl
-                    cumulative_pnl += profit
+                    exit_price = high
+                    pnl_pct = ((exit_price - entry_price) / entry_price) * 100
+                    pnl_pct=pnl_pct-self.fees
+                    profit = self.balance * (pnl_pct / 100)
+
+                    # fee = profit * fee_rate  # Fee is charged on the trade profit, not full balance
+                    # net_profit = profit - fee
+
                     self.balance += profit
-                    self.balance-=self.balance*self.fees
-  
-                    self.ledger.append([dt, predicted_direction, "TP-Sell", entry_price, exit_price, self.balance, profit, cumulative_pnl])
+                    cumulative_pnl += pnl_pct
+                    self.ledger.append([dt, predicted_direction, "TP-Sell", entry_price, exit_price, round(self.balance, 2), round(pnl_pct, 2), round(cumulative_pnl, 2)])
                     position = None
                     entry_price = 0
 
                 elif low <= sl_price:
-                    exit_price = sl_price
-                    pnl = ((exit_price-entry_price)/entry_price)
-                    profit=self.balance*pnl
-                    cumulative_pnl += profit
+                    exit_price = low
+                    pnl_pct = ((exit_price - entry_price) / entry_price) * 100
+                    pnl_pct=pnl_pct-self.fees
+                    profit = self.balance * (pnl_pct / 100)
+
                     self.balance += profit
-                    self.balance-=self.balance*self.fees
-  
-                    self.ledger.append([dt, predicted_direction, "SL-Sell", entry_price, exit_price, self.balance, pnl, cumulative_pnl])
+                    cumulative_pnl += pnl_pct
+                    self.ledger.append([dt, predicted_direction, "SL-Sell", entry_price, exit_price, round(self.balance, 2), round(pnl_pct, 2), round(cumulative_pnl, 2)])
                     position = None
                     entry_price = 0
 
                 elif signal == -1:
                     exit_price = open_price
-                    pnl = ((exit_price-entry_price)/entry_price)
-                    profit=self.balance*pnl
-                    cumulative_pnl += profit
+                    pnl_pct = ((exit_price - entry_price) / entry_price) * 100
+                    pnl_pct=pnl_pct-self.fees
+                    profit = self.balance * (pnl_pct / 100)
                     self.balance += profit
-                    self.balance-=self.balance*self.fees
-  
-                    self.ledger.append([dt, predicted_direction, "Signal-Sell-Direction-Change", entry_price, exit_price, self.balance, pnl, cumulative_pnl])
-                    position = "short"
+                    cumulative_pnl += pnl_pct
+                    self.ledger.append([dt, predicted_direction, "Signal-Sell-Direction-Change", entry_price, exit_price, round(self.balance, 2), round(pnl_pct, 2), round(cumulative_pnl, 2)])
+                    # Open new short
                     entry_price = open_price
-                    self.ledger.append([dt, predicted_direction, "Open-Short", entry_price, None, self.balance, 0, cumulative_pnl])
+                    fee = self.balance * fee_rate
+                    self.balance -= fee
+                    pnl=0
+                    pnl-=self.fees
+                    cumulative_pnl=cumulative_pnl+pnl   
+                    self.ledger.append([dt, predicted_direction, "Open-Short", entry_price, None, round(self.balance, 2), pnl, round(cumulative_pnl , 2)])
+                    position = "short"
 
+            # ---------------------- SHORT POSITION ----------------------
             elif position == "short":
-                tp_price = entry_price * (1 - self.takeprofit)
-                sl_price = entry_price * (1 + self.stoploss)
+                tp_price = entry_price * (1 - tp_pct)
+                sl_price = entry_price * (1 + sl_pct)
 
                 if low <= tp_price:
-                    exit_price = tp_price
-                    pnl = ((entry_price-exit_price)/entry_price)
-                    profit=self.balance*pnl
-                    cumulative_pnl += profit
+                    exit_price = low
+                    pnl_pct = ((entry_price - exit_price) / entry_price) * 100
+                    pnl_pct=pnl_pct-self.fees
+                    profit = self.balance * (pnl_pct / 100)
                     self.balance += profit
-                    self.balance-=self.balance*self.fees
-  
-                    self.ledger.append([dt, predicted_direction, "TP-Buy", entry_price, exit_price, self.balance, pnl, cumulative_pnl])
+                    cumulative_pnl += pnl_pct
+                    self.ledger.append([dt, predicted_direction, "TP-Buy", entry_price, exit_price, round(self.balance, 2), round(pnl_pct, 2), round(cumulative_pnl, 2)])
                     position = None
                     entry_price = 0
 
                 elif high >= sl_price:
-                    exit_price = sl_price
-                    pnl = ((entry_price-exit_price)/entry_price)
-                    profit=self.balance*pnl
-                    cumulative_pnl += profit
+                    exit_price = high
+                    pnl_pct = ((entry_price - exit_price) / entry_price) * 100
+                    pnl_pct=pnl_pct-self.fees
+                    profit = self.balance * (pnl_pct / 100)
                     self.balance += profit
-                    self.balance-=self.balance*self.fees
-  
-                    self.ledger.append([dt, predicted_direction, "SL-Buy", entry_price, exit_price, self.balance, pnl, cumulative_pnl])
+                    cumulative_pnl += pnl_pct
+                    self.ledger.append([dt, predicted_direction, "SL-Buy", entry_price, exit_price, round(self.balance, 2), round(pnl_pct, 2), round(cumulative_pnl, 2)])
                     position = None
                     entry_price = 0
 
                 elif signal == 1:
                     exit_price = open_price
-                    pnl = ((entry_price-exit_price)/entry_price)
-                    profit=self.balance*pnl
-                    cumulative_pnl += profit
+                    pnl_pct = ((entry_price - exit_price) / entry_price) * 100
+                    pnl_pct=pnl_pct-self.fees
+                    profit = self.balance * (pnl_pct / 100)
                     self.balance += profit
-                    self.balance-=self.balance*self.fees
-                    self.ledger.append([dt, predicted_direction, "Signal-Buy-Direction-Change", entry_price, exit_price, self.balance, pnl, cumulative_pnl])
-                    position = "long"
+                    cumulative_pnl += pnl_pct
+                    self.ledger.append([dt, predicted_direction, "Signal-Buy-Direction-Change", entry_price, exit_price, round(self.balance, 2), round(pnl_pct, 2), round(cumulative_pnl, 2)])
+                    # Open new long
                     entry_price = open_price
-                    self.ledger.append([dt, predicted_direction, "Open-Long", entry_price, None, self.balance, 0, cumulative_pnl])
+                    fee = self.balance * fee_rate
+                    self.balance -= fee
+                    pnl=0
+                    pnl-=self.fees
+                    cumulative_pnl=cumulative_pnl+pnl
+                    self.ledger.append([dt, predicted_direction, "Open-Long", entry_price, None, round(self.balance, 2), pnl, round(cumulative_pnl , 2)])
+                    position = "long"
 
+            # ---------------------- NO POSITION (Flat) ----------------------
             else:
                 if signal == 1:
+                    entry_price = open_price
+                    fee = self.balance * fee_rate
+                    self.balance -= fee
+                    pnl=0
+                    pnl-=self.fees
+                    cumulative_pnl=cumulative_pnl+pnl
+                    self.ledger.append([dt, predicted_direction, "Open-Long", entry_price, None, round(self.balance, 2), pnl, round(cumulative_pnl , 2)])
                     position = "long"
-                    entry_price = open_price
-                    self.balance-=self.balance*self.fees
-                    self.ledger.append([dt, predicted_direction, "Open-Long", entry_price, None, self.balance, 0, cumulative_pnl])
                 elif signal == -1:
-                    position = "short"
                     entry_price = open_price
-                    self.balance-=self.balance*self.fees
-                    self.ledger.append([dt, predicted_direction, "Open-Short", entry_price, None, self.balance, 0, cumulative_pnl])
+                    fee = self.balance * fee_rate
+                    self.balance -= fee
+                    pnl=0
+                    pnl-=self.fees
+                    cumulative_pnl=cumulative_pnl+pnl
+              
+                    self.ledger.append([dt, predicted_direction, "Open-Short", entry_price, None, round(self.balance, 2), pnl, round(cumulative_pnl , 2)])
+                    position = "short"
 
         return pd.DataFrame(self.ledger, columns=["datetime", "Predicted Direction", "Action", "Buy Price", "Sell Price", "Balance", "PnL", "PnL Sum"])
+
 
 if __name__ == "__main__":
         config_path=os.path.dirname(os.path.abspath(__file__))
@@ -160,7 +189,8 @@ if __name__ == "__main__":
 
         backtester = Backtester(signal_df=signal_df, data_df=data_df, start_balance=1000)
         ledger=backtester.run_backtest()
+        numeric_cols=["Buy Price", "Sell Price", "Balance", "PnL", "PnL Sum"]
+        ledger[numeric_cols]=ledger[numeric_cols].round(2)
         ledger.to_csv("ledger.csv")
-
 
 
