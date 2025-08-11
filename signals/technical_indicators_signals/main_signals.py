@@ -5,12 +5,14 @@ import datetime
 import os
 import inspect
 import hashlib
+import optuna
+from learning_alpha_edge.backtest.main_backtest import Backtester
 from learning_alpha_edge.utils.db_utils import *
 from learning_alpha_edge.data.binance.main_binance import load_config
 from learning_alpha_edge.data_updater.data_downloader import Data_Downloader
 from learning_alpha_edge.signals.technical_indicators_signals.signals_generator import generate_signals
 from learning_alpha_edge.technical_indicators.ti  import * 
-from sqlalchemy import create_engine, inspect as sql_inspect, text
+from learning_alpha_edge.utils.data_utils import resample_ohlcv_data
 # from learning_alpha_edge.backtest.main_backtest import Backtester 
 
 # Randomly enable indicators (True/False)
@@ -34,7 +36,7 @@ def apply_indicators(df:pd.DataFrame, randomly_selected_indicators, timeperiods:
                 timeperiod=timeperiods.get(name,20)
                 result_df=func(df,timeperiod)
             else:
-                result_df = func(df)
+                result_df:pd.DataFrame = func(df)
 
             new_cols = set(result_df.columns) - existing_cols
             new_data = result_df[list(new_cols)]
@@ -78,9 +80,9 @@ def save_strategy_to_db(engine, strategy_name, symbol:str, time_horizon, data_ex
     for ind in all_indicators:
         is_enabled = ind in selected_indicators
         row[f'{ind}'] = is_enabled
-        if ind in indicator_timeperiods and ind in selected_indicators:
+        if ind in timeperiods and ind in selected_indicators:
             row[f'{ind}_timeperiod'] = timeperiods[ind]
-        if ind in indicator_timeperiods and  not ind  in selected_indicators:
+        if ind in timeperiods and  not ind  in selected_indicators:
             row[f'{ind}_timeperiod']=None
         
 
@@ -92,32 +94,54 @@ def save_strategy_to_db(engine, strategy_name, symbol:str, time_horizon, data_ex
 def save_signals(engine:Engine, strategy_name, signal_df:pd.DataFrame):
     # Add strategy name column
     save_to_db(signal_df, engine, schema="signals", table_name=strategy_name)
-def add_timeperiod_columns_for_indicators(engine,indicator_map, table_name="config_strtg", schema="public" ):
-    if indicator_map is None:
-        raise ValueError("indicator_map is required")
 
-    # Get current columns in the table
-    inspector = sql_inspect(engine)
-    existing_columns = {col["name"] for col in inspector.get_columns(table_name, schema=schema)}
+def objective (trial:optuna.Trial):
+        for exchange in exchanges:
+                
+            for base_symbol in symbols_base:
+                symbol = base_symbol + "USDT"
+                # Fetch data
+                # schema = exchange.lower()  # 'binance' or 'bybit'
+                # downloader = Data_Downloader(symbol=symbol, exchange=exchange, resample_to=interval, engine=engine, schema=schema)
+                # df, resampled_df = downloader.get_data()                               
+                        
+                selected_indicators =[]
+                indicator_timeperiods={}
+                df=pd.read_sql(f'SELECT * FROM "binance"."btc_1m" ORDER BY datetime', engine)
+                df['datetime']=pd.to_datetime(df['datetime'])
+                resampled_df=resample_ohlcv_data(df,'4h')
+                for name, func in indicator_map.items():
+                    use_indicator = trial.suggest_categorical(f"use_{name}", [True, False])
+                    if use_indicator:
+                        selected_indicators.append(name)
 
-    with engine.connect() as conn:
-        for indicator, func in indicator_map.items():
-            try:
-                sig = inspect.signature(func)
-                params = sig.parameters
-
-                if len(params) >= 2:  # Indicator uses timeperiod
-                    column_name = f"timeperiod_{indicator.lower()}"
-                    if column_name not in existing_columns:
-                        print(f"[INFO] Adding column: {column_name}")
-                        conn.execute(
-                            text(f'ALTER TABLE "{schema}"."{table_name}" ADD COLUMN "{column_name}" INTEGER')
+                        # If indicator has 'timeperiod' parameter, suggest it
+                    if 'timeperiod' in inspect.signature(func).parameters:
+                        indicator_timeperiods[name] = trial.suggest_int(
+                            f"timeperiod_{name}", 5, 50
                         )
-                    else:
-                        print(f"[INFO] Column already exists: {column_name}")
-            except Exception as e:
-                print(f"[WARN] Could not inspect function for indicator '{indicator}': {e}")
+                raw_string = f"{exchange}_{symbol}_{interval}_{trial.number}_{datetime.datetime.now().isoformat()}"
+                strategy_hash = hashlib.sha256(raw_string.encode()).hexdigest()[:8]  # shorten for readability
+                strategy_name = f"strategy_{trial.number}_{strategy_hash}"               
+                df_with_indicators = apply_indicators(resampled_df.copy(), selected_indicators,indicator_timeperiods)
+                signal_df = generate_signals(df_with_indicators, selected_indicators)
+                signal_df = majority_vote(signal_df)
+                signal_df["datetime"] = signal_df["datetime"].dt.strftime("%Y-%m-%d %H:%M:%S")
 
+                save_strategy_to_db(
+                    engine, strategy_name, base_symbol, interval, exchange,
+                    selected_indicators, all_indicators,indicator_timeperiods
+                )
+
+                save_signals(engine, strategy_name, signal_df[['datetime','signal']])
+                signal_df=pd.read_sql(f'SELECT * FROM "signals"."{strategy_name}" ORDER BY datetime', engine)
+                signal_df['datetime']=pd.to_datetime(signal_df['datetime'])
+                backtester = Backtester(signal_df, df, start_balance=1000)
+                ledger=backtester.run_backtest() 
+                ledger.to_sql(strategy_name, engine, schema="ledger", if_exists="replace", index=False)
+                pnl=ledger["PnLSum"].iloc[-1]
+        return pnl
+    
 
 
 # Run the pipeline
@@ -145,49 +169,8 @@ if __name__ == "__main__":
 
     all_indicators = list(indicator_map.keys())
 
-    # Create PostgreSQL engine
-            
-    for exchange in exchanges:
-        
-        
-
-        for base_symbol in symbols_base:
-            symbol = base_symbol + "USDT"
-
-            # Fetch data
-            schema = exchange.lower()  # 'binance' or 'bybit'
-            downloader = Data_Downloader(symbol=symbol, exchange=exchange, resample_to=interval, engine=engine, schema=schema)
-            df, resampled_df = downloader.get_data()
-            # resampled_df = pd.read_sql(f'SELECT * FROM "binance"."btc_1m" ORDER BY datetime', engine)
-            resampled_df['datetime']=pd.to_datetime(resampled_df['datetime'])
-
-            if resampled_df is None or resampled_df.empty:
-                print(f"[WARN] No data found for {symbol} on {exchange} at {interval}")
-                continue
-
-            # use resampl
-            for i in range(1):
-                selected_indicators = randomly_select_indicators(indicator_map)
-                indicator_timeperiods=timeperiods
-                raw_string = f"{exchange}_{symbol}_{interval}_{i}_{datetime.datetime.now().isoformat()}"
-                strategy_hash = hashlib.sha256(raw_string.encode()).hexdigest()[:8]  # shorten for readability
-                strategy_name = f"strategy_{i}_{strategy_hash}"               
-                df_with_indicators = apply_indicators(resampled_df.copy(), selected_indicators,indicator_timeperiods)
-                signal_df = generate_signals(df_with_indicators, selected_indicators)
-                signal_df = majority_vote(signal_df)
-                signal_df["datetime"] = signal_df["datetime"].dt.strftime("%Y-%m-%d %H:%M:%S")
-
-                save_strategy_to_db(
-                    engine, strategy_name, base_symbol, interval, exchange,
-                    selected_indicators, all_indicators,indicator_timeperiods
-                )
-
-                save_signals(engine, strategy_name, signal_df[['datetime','signal']])
-                signal_df=pd.read_sql(f'SELECT * FROM "signals"."{strategy_name}" ORDER BY datetime', engine)
-                signal_df['datetime']=pd.to_datetime(signal_df['datetime'])
-                
-
-               
+    study = optuna.create_study(direction="maximize")
+    study.optimize(objective, n_trials=10)           
 
 
                 

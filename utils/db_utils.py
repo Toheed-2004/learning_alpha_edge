@@ -11,13 +11,15 @@ def save_to_db(df:pd.DataFrame, engine:Engine, schema:str, table_name:str):
     Save DataFrame to a PostgreSQL table inside a specific schema.
     - Appends if table exists, creates otherwise.
     """
-    df.to_sql(
+    with engine.begin() as conn:
+        df.to_sql(
         name=table_name,
-        con=engine,
+        con=conn,
         schema=schema,
         if_exists='append',
         index=False
     )
+    
     print(f"[INFO] Saved data to {schema}.{table_name}")
 
 
@@ -65,7 +67,7 @@ if __name__ == "__main__":
         port="5432",
         dbname="db"
     )
-    schema = ["public","signals"]
+    schema = ["public","signals","ledger"]
     for schema_name in schema:
         drop_all_tables(engine, schema_name)
 

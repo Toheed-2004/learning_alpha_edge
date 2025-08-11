@@ -9,7 +9,7 @@ class Backtester:
         self.signal_df = signal_df.set_index("datetime")
         self.data_df = data_df.set_index("datetime")
         self.df = self.data_df.copy()
-        self.df["signal"] = self.signal_df["predicted_direction"]
+        self.df["signal"] = self.signal_df["signal"]
         # self.df["signal"] = self.df["signal"].ffill() # forward filling the NaNs with previous signal,untill new signal is encountered
         
         self.balance = start_balance
@@ -153,21 +153,22 @@ class Backtester:
                     self.ledger.append([dt, predicted_direction, "Open-Short", entry_price, None, round(self.balance, 2), pnl, round(cumulative_pnl , 2)])
                     position = "short"
 
-        return pd.DataFrame(self.ledger, columns=["datetime", "Predicted Direction", "Action", "Buy Price", "Sell Price", "Balance", "PnL", "PnL Sum"])
-
-
-if __name__ == "__main__":
-        config_path=os.path.dirname(os.path.abspath(__file__))
-        config_path=os.path.join(config_path,"backtest_config.ini")
-        config = load_config(config_path)
-        db_cfg = config['postgres']
-        engine = get_pg_engine(
+        return pd.DataFrame(self.ledger, columns=["datetime", "Predicted Direction", "Action", "Buy Price", "Sell Price", "Balance", "PnL", "PnLSum"])
+    
+config_path=os.path.dirname(os.path.abspath(__file__))
+config_path=os.path.join(config_path,"backtest_config.ini")
+config = load_config(config_path)
+db_cfg = config['postgres']
+engine = get_pg_engine(
             user=db_cfg.get('user'),
             password=db_cfg.get('password'),
             host=db_cfg.get('host'),
             port=db_cfg.get('port'),
             dbname=db_cfg.get('dbname')
         )
+
+if __name__ == "__main__":
+       
         with engine.begin() as conn:
          signal_path=os.path.dirname(__file__)
          signal_path=os.path.join(signal_path,"signals.csv")
