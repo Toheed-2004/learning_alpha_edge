@@ -2,9 +2,9 @@ import os
 from pathlib import Path
 import pandas as pd
 from ml.utils.config import Config
-from ml.learners.abr_learner import AdaBoostRegressorLearner
-from ml.learners.etr_learner import ExtraTreesRegressorLearner
-from ml.learners.mlpr_learner import MLPRegressorLearner
+from ml.learners.sklearn_learners import AdaBoostRegressorLearner
+from ml.learners.sklearn_learners import ExtraTreesRegressorLearner
+from ml.learners.sklearn_learners import MLPRegressorLearner
 # import other learners similarly...
 
 MODEL_MAP = {

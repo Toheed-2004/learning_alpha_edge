@@ -1,4 +1,5 @@
 import talib
+import random
 
 # Indicator Application Functions
 def _applysma( df,timeperiod=20):
@@ -683,4 +684,11 @@ timeperiods = {
     "wma": 20,
 }
 
+indicator_flags = [
+    f"{name} = {random.choice([True, False])}"
+    for name in indicator_map.keys()
+]
 
+# Save to file
+with open("indicators_config.txt", "w") as f:
+    f.write("\n".join(indicator_flags))
