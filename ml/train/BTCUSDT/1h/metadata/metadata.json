@@ -1,0 +1,17 @@
+{
+    "model_name": "ada",
+    "exchange": "binance",
+    "symbol": "btcusdt",
+    "time_horizon": "1h",
+    "params": {
+        "n_estimators": 466,
+        "learning_rate": 0.09613225786845805
+    },
+    "input_features": [
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Target(close.shift(-1))"
+    ]
+}

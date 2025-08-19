@@ -2,7 +2,7 @@ from sqlalchemy import create_engine, text,Engine
 import pandas as pd
 
 
-def get_pg_engine(user, password, host, port, dbname):
+def get_pg_engine(user, password, host, port, dbname)->Engine:
     return create_engine(f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{dbname}")
 
 
@@ -21,6 +21,12 @@ def save_to_db(df:pd.DataFrame, engine:Engine, schema:str, table_name:str):
     )
     
     print(f"[INFO] Saved data to {schema}.{table_name}")
+
+def load_data(schema:str,table_name:str,engine)->pd.DataFrame:
+    query=f'SELECT * FROM "{schema}"."{table_name}" ORDER BY datetime ASC;'
+    df=pd.read_sql(query,engine)
+    df["datetime"]=pd.to_datetime(df["datetime"])
+    return df
 
 
 def drop_table(engine:Engine, schema, table_name):

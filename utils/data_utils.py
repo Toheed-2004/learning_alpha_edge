@@ -1,6 +1,6 @@
 import pandas as pd
 from sqlalchemy import create_engine
-
+import numpy as np
 def preprocess_klines(df:pd.DataFrame, interpolate_method='linear', fill_zero_volume='ffill'):
     numeric_cols = ['open', 'high', 'low', 'close', 'volume']
 
@@ -58,3 +58,42 @@ def resample_ohlcv_data(df: pd.DataFrame, new_interval: str) -> pd.DataFrame:
 
     ohlcv_resampled = ohlcv_resampled.dropna().reset_index()
     return ohlcv_resampled
+
+def generate_signals(df: pd.DataFrame, predictions, threshold=0.001, mode="trend"):
+    """
+    Generate trading signals from predicted next close.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Must have 'close' column (time T close) and 'datetime'.
+    predictions : np.ndarray
+        Predictions for close_{t+1}, aligned with df.
+    threshold : float
+        Minimum relative change to trigger a trade.
+    mode : str
+        'direct' → compare prediction vs current close
+        'trend'  → compare prediction vs previous prediction
+
+    Returns
+    -------
+    pd.Series
+        Signal series aligned with df.index (1=long, -1=short, 0=hold).
+    """
+    df = df.copy()
+    df.set_index("datetime", inplace=True)
+    df["predicted"] = predictions  # already aligned with df
+
+    if mode == "direct":
+        rel_change = (df["predicted"] - df["close"]) / df["close"]
+    elif mode == "trend":
+        rel_change = df["predicted"].pct_change()
+    else:
+        raise ValueError("mode must be 'direct' or 'trend'")
+
+    df["signal"] = np.where(rel_change > threshold, 1,
+                     np.where(rel_change < -threshold, -1, 0))
+    df.reset_index(inplace=True)
+
+    return df[["datetime","signal"]].fillna(0)
+
