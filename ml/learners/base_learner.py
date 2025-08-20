@@ -48,7 +48,7 @@ class BaseLearner:
         Save the trained model to the model_path.
         """
         # ensure directory exists
-        model_file = os.path.join(self.model_path, f"{model_name}.pkl")
+        model_file = os.path.join(self.model_path, f"{model_name}")
         
         with open(model_file, "wb") as f:
             joblib.dump(model, f)

@@ -21,7 +21,7 @@ def randomly_select_indicators(indicator_map):
 
 
 # Apply only selected indicators
-def apply_indicators(df:pd.DataFrame, randomly_selected_indicators, timeperiods:dict):
+def apply_indicators(df:pd.DataFrame, randomly_selected_indicators, timeperiods:dict=None):
     df = df.copy()
     indicators_df = df[["open", "high", "low", "close", "volume"]].copy()
     existing_cols = set(indicators_df.columns)
@@ -33,7 +33,8 @@ def apply_indicators(df:pd.DataFrame, randomly_selected_indicators, timeperiods:
             params = sig.parameters
 
             if 'timeperiod' in params:
-                timeperiod=timeperiods.get(name,20)
+                # timeperiod=timeperiods.get(name,20)
+                timeperiod=20
                 result_df=func(df,timeperiod)
             else:
                 result_df:pd.DataFrame = func(df)
