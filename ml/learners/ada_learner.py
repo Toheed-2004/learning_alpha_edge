@@ -3,12 +3,13 @@ import optuna
 import pandas as pd
 import psycopg2
 from sklearn.ensemble import AdaBoostRegressor
-from sklearn.metrics import mean_squared_error
+from sklearn.metrics import mean_squared_error,mean_absolute_error,r2_score
 from sklearn.model_selection import train_test_split
+from learning_alpha_edge.utils.data_utils import engineer_features
 from sklearn.tree import DecisionTreeRegressor
 from learning_alpha_edge.data_updater.data_downloader import Data_Downloader
 from learning_alpha_edge.ml.learners.base_learner import BaseLearner
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import StandardScaler
 # from utils.indicators import apply_indicators  
 from configparser import ConfigParser
 import numpy as np
@@ -81,94 +82,104 @@ class AdaBoostLearner(BaseLearner):
 
     # ----------------- Training -----------------
     def train(self):
-        df_base = load_data("binance","btc_1m",self.engine)
+        df_base = load_data("binance", "btc_1m", self.engine)
+
         for interval in self.intervals:
             print(f"\n[abr] Training {self.symbol} @ {interval} on {self.exchange}")
-                  
-            df=resample_ohlcv_data(df_base,interval)
-            # Shift target: predict next candle's close
-            minmaxscaler=MinMaxScaler()
-            df["target"] = df["close"].shift(-1)
-            # --- Feature Engineering ---
-           
-            # 1. Returns
-            df["return_1"] = df["close"].pct_change()
-            df["log_return"] = np.log(df["close"] / df["close"].shift(1))
 
-            # 2. Lag features
-            for lag in range(1, 6):
-                df[f"close_lag{lag}"] = df["close"].shift(lag)
+            def objective(trial: optuna.Trial):
+                # 1) Resample
+                df = resample_ohlcv_data(df_base, interval)
 
-            # 3. Rolling statistics
-            df["rolling_mean_5"] = df["close"].rolling(5).mean()
-            df["rolling_std_5"] = df["close"].rolling(5).std()
-            df["volatility_10"] = df["return_1"].rolling(10).std()
+                # 2) Target = next close
+                df["target"] = df["close"].shift(-1)
 
-            # 4. Volume features
-            df["volume_ma_5"] = df["volume"].rolling(5).mean()
-            df["volume_change"] = df["volume"].pct_change()
-            df["obv"] = (np.sign(df["close"].diff()) * df["volume"]).fillna(0).cumsum()
+                # 3) Trial-dependent features
+                df = engineer_features(df, self.config, trial)
 
-            # 5. TA-Lib indicators
-            df=apply_indicators(df, ['sma', 'ema', 'macd', 'rsi', 'atr'])
+                # 4) Drop NaNs
+                df = df.dropna()
 
-        # Drop NaNs introduced by rolling/indicators
-            df = df.dropna()
-                # Split time-series into train/backtest/forward
-            df_train, df_backtest, df_forward = self.split_time_series(
-                df, train_pct=75.0, backtest_pct=20.0, forward_pct=5.0
-            )
-            
-            # Build train/val/forward sets
-            X_train = df_train.drop(columns=["datetime", "target"])
-            X_train=minmaxscaler.fit_transform(X_train)
-            y_train = df_train["target"]
+                # 5) Split
+                df_train, df_backtest, df_forward = self.split_time_series(
+                    df, train_pct=75.0, backtest_pct=20.0, forward_pct=5.0
+                )
 
-            X_val = df_backtest.drop(columns=["datetime", "target"])
-            X_val=minmaxscaler.fit_transform(X_val)
-            y_val = df_backtest["target"]
+                # 6) Scale (fit only on train)
+                scaler =StandardScaler()
+                X_train = (df_train.drop(columns=["datetime", "target"]))
+                y_train = df_train["target"]
 
-            X_forward = df_forward.drop(columns=["datetime", "target"])
-            X_forward=minmaxscaler.fit_transform(X_forward)
-            y_forward = df_forward["target"]
+                X_val = (df_backtest.drop(columns=["datetime", "target"]))
+                y_val = df_backtest["target"]
 
-            def objective(trial:optuna.Trial):
+                X_train = scaler.fit_transform(X_train)
+                X_val = scaler.transform(X_val)
+
+                # 7) Build + fit model
                 params = self.suggest_params(trial)
                 model = self.build_model(params)
-                mean=df_train["target"].mean()
                 model.fit(X_train, y_train)
 
+                # 8) Backtest on validation
                 preds = model.predict(X_val)
-                signals = generate_signals(df_backtest,preds)
-                backtester=Backtester(signals,df_backtest)
-                ledger=backtester.run_backtest()
-                pnl=ledger["PnLSum"].iloc[-1]
+                signals = generate_signals(df_backtest, preds)
+                backtester = Backtester(signals, df_backtest)
+                pnl = backtester.run_backtest()["PnLSum"].iloc[-1]
 
-                # self.log_trial(trial.number, params, pnl)
                 return pnl
 
-            # Optuna optimization
+            # Run optimization for this interval
             study = optuna.create_study(direction="maximize")
             study.optimize(objective, n_trials=5)
 
+            #  Best model training on all data
             best_params = study.best_trial.params
             best_model = self.build_model(best_params)
-            best_model.fit(X_train, y_train)
-            prediction=best_model.predict(X_forward)
-            signals = generate_signals(df_forward,prediction)
-            backtester=Backtester(signals,df_forward)
-            ledger=backtester.run_backtest()
-            pnl=ledger["PnLSum"].iloc[-1]
-            print(pnl)
 
-            # Retrain on all available data if desired
-            model_name=f'ada_{self.time_horizon}_{self.exchange}_ml{study.best_trial._trial_id}.pkl'
-            self.save_model(best_model,model_name)
+            # Resample + feature engineering again with best params
+            df = resample_ohlcv_data(df_base, interval)
+            df["target"] = df["close"].shift(-1)
+            df = engineer_features(df, self.config, study.best_trial)  # use best trial
+            df = df.dropna()
+
+            df_train, df_backtest, df_forward = self.split_time_series(
+                df, train_pct=75.0, backtest_pct=20.0, forward_pct=5.0
+            )
+
+            scaler = StandardScaler()
+            X_train = (df_train.drop(columns=["datetime", "target"]))
+            y_train = df_train["target"]
+
+            X_forward = (df_forward.drop(columns=["datetime", "target"]))
+            y_forward = df_forward["target"]
+            X_train = scaler.fit_transform(X_train)
+            X_forward = scaler.transform(X_forward)
+
+            best_model.fit(X_train, y_train)
+            prediction = best_model.predict(X_forward)
+            y_forward_pred = prediction
+            mse_f = mean_squared_error(y_forward, y_forward_pred)
+            rmse_f = np.sqrt(mse_f)
+            mae_f = mean_absolute_error(y_forward, y_forward_pred)
+            r2_f = r2_score(y_forward, y_forward_pred)
+            signals = generate_signals(df_forward, prediction)
+            pnl = Backtester(signals, df_forward).run_backtest()["PnLSum"].iloc[-1]
+            print("\nForward Test Performance:")
+            print(f" MSE : {mse_f:.6f}")
+            print(f" RMSE: {rmse_f:.6f}")
+            print(f" MAE : {mae_f:.6f}")
+            print(f" R²  : {r2_f:.6f}")
+
+            print(f"[abr][{interval}] Forward PnL: {pnl:.2f}")
+            print(f"[abr][{interval}] Best trial params: {best_params}")
+
+            # Save model + metadata
+            model_name = f'ada_{self.time_horizon}_{self.exchange}_{interval}_ml{study.best_trial.number}.pkl'
+            self.save_model(best_model, model_name)
             self.save_metadata(best_params)
             self.log_trial(study.best_trial.number, best_params, study.best_value, is_best=True)
 
-            print(f"[abr][{interval}] Best PnL: {study.best_value:.2f} with {best_params}")
-
 if __name__=="__main__":
-    learner=AdaBoostLearner("BTCUSDT","4h","binance")
+    learner=AdaBoostLearner("BTCUSDT","1h","binance")
     learner.train()

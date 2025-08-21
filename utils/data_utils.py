@@ -1,6 +1,12 @@
 import pandas as pd
-from sqlalchemy import create_engine
+import inspect
+from sklearn.preprocessing import MinMaxScaler
+from learning_alpha_edge.technical_indicators.ti import indicator_map
 import numpy as np
+import configparser
+from configparser import ConfigParser
+import optuna
+
 def preprocess_klines(df:pd.DataFrame, interpolate_method='linear', fill_zero_volume='ffill'):
     numeric_cols = ['open', 'high', 'low', 'close', 'volume']
 
@@ -97,3 +103,21 @@ def generate_signals(df: pd.DataFrame, predictions, threshold=0.001, mode="trend
 
     return df[["datetime","signal"]].fillna(0)
 
+def engineer_features(df,config:ConfigParser,trial:optuna.Trial):         
+    from learning_alpha_edge.signals.technical_indicators_signals.main_signals import apply_indicators
+    scaler=MinMaxScaler()
+    selected_indicators=[]
+    timeperiods={}
+    ind_config=config["technical_indicators"]
+    for ind in ind_config:
+        if config.getboolean("technical_indicators", ind):
+            selected_indicators.append(ind)
+            func=indicator_map[ind]
+            params=inspect.signature(func).parameters
+            if 'timeperiod' in params:
+                timeperiods[ind]=trial.suggest_int(f'Window_size_{ind}',5,50)
+    df=apply_indicators(df,selected_indicators,timeperiods)
+        
+    return df
+
+        

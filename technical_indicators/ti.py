@@ -689,6 +689,7 @@ indicator_flags = [
     for name in indicator_map.keys()
 ]
 
+
 # Save to file
-with open("indicators_config.txt", "w") as f:
-    f.write("\n".join(indicator_flags))
+# with open("indicators_config.txt", "w") as f:
+#     f.write("\n".join(indicator_flags))
