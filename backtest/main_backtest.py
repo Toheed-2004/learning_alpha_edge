@@ -9,7 +9,7 @@ class Backtester:
         self.signal_df = signal_df.set_index("datetime")
         self.data_df = data_df.set_index("datetime")
         self.df = self.data_df.copy()
-        self.df["signal"]=self.df["signal"].shift(1)
+        self.signal_df["signal"]=self.signal_df["signal"].shift(1)
         self.df["signal"] = self.signal_df["signal"]
         # self.df["signal"] = self.df["signal"].ffill() # forward filling the NaNs with previous signal,untill new signal is encountered
         

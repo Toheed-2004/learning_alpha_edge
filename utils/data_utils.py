@@ -65,44 +65,58 @@ def resample_ohlcv_data(df: pd.DataFrame, new_interval: str) -> pd.DataFrame:
     ohlcv_resampled = ohlcv_resampled.dropna().reset_index()
     return ohlcv_resampled
 
-def generate_signals(df: pd.DataFrame, predictions, threshold=0.001, mode="trend"):
+def generate_signals(df, predictions, threshold=0.0015, use_dynamic_threshold=False):
     """
-    Generate trading signals from predicted next close.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Must have 'close' column (time T close) and 'datetime'.
-    predictions : np.ndarray
-        Predictions for close_{t+1}, aligned with df.
+    Generate trading signals based on predicted price changes.
+    
+    Parameters:
+    -----------
+    df : pandas.DataFrame
+        DataFrame with datetime index and price data
+    predictions : array-like
+        Model predictions for the next period's close price (close@T+1)
     threshold : float
-        Minimum relative change to trigger a trade.
-    mode : str
-        'direct' → compare prediction vs current close
-        'trend'  → compare prediction vs previous prediction
-
-    Returns
-    -------
-    pd.Series
-        Signal series aligned with df.index (1=long, -1=short, 0=hold).
+        Minimum expected return threshold to trigger a trade
+    use_dynamic_threshold : bool
+        Whether to use a dynamic threshold based on recent volatility
+    
+    Returns:
+    --------
+    pandas.DataFrame with datetime and signal columns
     """
     df = df.copy()
-    df.set_index("datetime", inplace=True)
-    df["predicted"] = predictions  # already aligned with df
-
-    if mode == "direct":
-        rel_change = (df["predicted"] - df["close"]) / df["close"]
-    elif mode == "trend":
-        rel_change = df["predicted"].pct_change()
+    
+    # Ensure we have a datetime index
+    if "datetime" in df.columns:
+        df.set_index("datetime", inplace=True)
+    
+    # Add predictions to dataframe
+    df["predicted"] = predictions
+    
+    # Calculate the expected return from current close to predicted next close
+    # At time T, we know close@T and predict close@T+1
+    expected_return = (df["predicted"] - df["close"]) / df["close"]
+    
+    # Optional: Dynamic threshold based on recent volatility
+    if use_dynamic_threshold:
+        volatility = df["close"].pct_change().rolling(window=20).std().fillna(0.001)
+        dynamic_threshold = threshold * (1 + volatility * 10)  # Scale threshold with volatility
     else:
-        raise ValueError("mode must be 'direct' or 'trend'")
-
-    df["signal"] = np.where(rel_change > threshold, 1,
-                     np.where(rel_change < -threshold, -1, 0))
+        dynamic_threshold = threshold
+    
+    # Generate signals
+    df["signal"] = 0  # Default: no position
+    
+    # Long signal: expected return exceeds positive threshold
+    df.loc[expected_return > dynamic_threshold, "signal"] = 1
+    
+    # Short signal: expected return below negative threshold
+    df.loc[expected_return < -dynamic_threshold, "signal"] = -1
+    
+    # Reset index to return datetime as a column
     df.reset_index(inplace=True)
-
-    return df[["datetime","signal"]].fillna(0)
-
+    
+    return df[["datetime", "signal"]]
 def engineer_features(df,config:ConfigParser,trial:optuna.Trial):         
     from learning_alpha_edge.signals.technical_indicators_signals.main_signals import apply_indicators
     scaler=MinMaxScaler()
@@ -115,7 +129,7 @@ def engineer_features(df,config:ConfigParser,trial:optuna.Trial):
             func=indicator_map[ind]
             params=inspect.signature(func).parameters
             if 'timeperiod' in params:
-                timeperiods[ind]=trial.suggest_int(f'Window_size_{ind}',5,50)
+                timeperiods[ind]=trial.suggest_int(f'Window_size_{ind}',20,20)
     df=apply_indicators(df,selected_indicators,timeperiods)
         
     return df
