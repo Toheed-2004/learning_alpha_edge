@@ -10,6 +10,7 @@ from typing import Tuple, Dict, Any
 import optuna
 from optuna.samplers import TPESampler
 
+
 class xgboost_learner(BaseLearner):
     def __init__(self, symbol, time_horizon, exchange):
         super().__init__(symbol, time_horizon, "xgb", exchange)
@@ -123,7 +124,7 @@ class xgboost_learner(BaseLearner):
         
         study = optuna.create_study(
             direction='maximize',
-            sampler=TPESampler(seed=42)
+            sampler=TPESampler(seed=42) # Use Seed For Reproducibility
         )
         
         study.optimize(
@@ -223,7 +224,7 @@ class xgboost_learner(BaseLearner):
         
         # Store the final model
         self.model = models[-1] if models else None
-        
+        self.save_model(self.model,self.model_name)
         # Generate signals
         backtest_start_idx = initial_train_size
         backtest_datetime = combined_datetime[backtest_start_idx:]
@@ -256,7 +257,7 @@ class xgboost_learner(BaseLearner):
         
         return signals_df
 
-    def run_full_pipeline(self, train_df, backtest_df, test_df, N=10, 
+    def run_full_pipeline(self, train_df:pd.DataFrame, backtest_df:pd.DataFrame, test_df:pd.DataFrame, N=10, 
                          use_optuna=True, n_trials=30, threshold=0.01,
                          step_size=10):
         """Complete pipeline with configurable step size."""
@@ -264,7 +265,7 @@ class xgboost_learner(BaseLearner):
         backtest_df_prepared = self.prepare_backtest_data(backtest_df.copy())
         test_df_prepared = self.prepare_backtest_data(test_df.copy())
         
-        print("=== BACKTEST PHASE ===")
+        # print("=== BACKTEST PHASE ===")
         backtest_signals, metrics = self.train_and_generate_signals(
             train_df_prepared, backtest_df_prepared, N, use_optuna, n_trials, threshold, step_size
         )
@@ -300,5 +301,5 @@ if __name__ == '__main__':
     )
     
     print(f"\nFinal Results:")
-    print(f"Backtest PnL: ${backtest_pnl:.2f}")
-    print(f"Forward Test PnL: ${test_pnl:.2f}")
+    print(f"Backtest PnL: {backtest_pnl:.2f}%")
+    print(f"Forward Test PnL: {test_pnl:.2f}%")
