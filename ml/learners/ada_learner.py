@@ -1,185 +1,305 @@
 # ml/learners/abr.py
-import optuna
 import pandas as pd
-import psycopg2
-from sklearn.ensemble import AdaBoostRegressor
-from sklearn.metrics import mean_squared_error,mean_absolute_error,r2_score
-from sklearn.model_selection import train_test_split
-from learning_alpha_edge.utils.data_utils import engineer_features
-from sklearn.tree import DecisionTreeRegressor
-from learning_alpha_edge.data_updater.data_downloader import Data_Downloader
-from learning_alpha_edge.ml.learners.base_learner import BaseLearner
-from sklearn.preprocessing import StandardScaler
-# from utils.indicators import apply_indicators  
-from configparser import ConfigParser
 import numpy as np
-from learning_alpha_edge.utils.db_utils import get_pg_engine,load_data
-from learning_alpha_edge.utils.data_utils import resample_ohlcv_data,generate_signals
-from learning_alpha_edge.backtest.main_backtest import Backtester
-from learning_alpha_edge.signals.technical_indicators_signals.main_signals import apply_indicators
+from sklearn.ensemble import AdaBoostRegressor
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import r2_score
+import optuna
+from optuna.samplers import TPESampler
+from learning_alpha_edge.ml.learners.base_learner import BaseLearner
+from learning_alpha_edge.utils.db_utils import load_data
+from learning_alpha_edge.utils.data_utils import resample_ohlcv_data
+from typing import Tuple, Dict, Any
 import os
+from configparser import ConfigParser
+
 
 class AdaBoostLearner(BaseLearner):
     def __init__(self, symbol, time_horizon, exchange):
-        
         super().__init__(symbol, time_horizon, "ada", exchange)
-
+        
         # Load config
         config_path = os.path.dirname(os.path.abspath(__file__))
         config_path = os.path.join(config_path, "config.ini")        
         self.config = ConfigParser()
         self.config.read(config_path)
-        self.intervals=['1h']
-        self.train_split = float(self.config["train"]["train_split_percent"]) / 100
-        self.backtest_split = float(self.config["train"]["backtest_split_percent"]) / 100
-        self.forwardtest_split = float(self.config["train"]["forwardtest_split_percent"]) / 100
-        self.optuna_trials = eval(self.config["train"]["optuna_trials_per_model"])["ada"]
-        self.pg_cfg=self.config["postgres"]
-        self.user = self.pg_cfg["user"]
-        self.password = self.pg_cfg["password"]
-        self.host = self.pg_cfg["host"]
-        self.port = self.pg_cfg["port"]
-        self.dbname = self.pg_cfg["dbname"]
-        self.engine=get_pg_engine(self.user,self.password,self.host,self.port,self.dbname)
-
-        self.pg_cfg = self.config["postgres"]
-
-    # ----------------- Optuna API -----------------
-    def suggest_params(self, trial: optuna.Trial):
-        return {
-            "n_estimators": trial.suggest_int("n_estimators", 50, 500),
-            "learning_rate": trial.suggest_float("learning_rate", 0.01, 1.0, log=True),
-            "max_depth": trial.suggest_int("max_depth", 2, 8),
-            "min_samples_split": trial.suggest_int("min_samples_split", 2, 20),
-        }
-
-    def split_time_series(self,df:pd.DataFrame, train_pct, backtest_pct, forward_pct):
-       
         
-        n = len(df)
-        train_end = int(n * (train_pct / 100))
-        backtest_end = train_end + int(n * (backtest_pct / 100))
+        self.df = load_data("binance", "btc_1m", self.engine)
+        self.df = resample_ohlcv_data(self.df, self.time_horizon)
+        self.model = None
+        self.scaler = StandardScaler()
+        self.signals_df = None
+        self.best_params = None
 
-        df_train = df.iloc[:train_end]
-        df_backtest = df.iloc[train_end:backtest_end]
-        df_forward = df.iloc[backtest_end:]
+    def create_lagged_features(self, df: pd.DataFrame, N=10):
+        """Create lagged OHLCV features to predict next close."""
+        if 'datetime' in df.columns:
+           df = df.set_index('datetime')
+        features = ["open", "high", "low", "close", "volume"]
+        data = df[features].to_numpy()
+        datetime_index = df.index[N:]
+        num_rows, num_features = data.shape
 
-        return df_train, df_backtest, df_forward
+        X, y = [], []
+        for end_idx in range(N - 1, num_rows - 1):
+            window = data[end_idx - N + 1 : end_idx + 1].flatten()
+            target = data[end_idx + 1, features.index("close")]
+            X.append(window)
+            y.append(target)
 
+        return np.array(X), np.array(y), datetime_index
 
-
+    def generate_signals(self, predictions, true_prices, datetime_index, threshold=0.01):
+        """Generate trading signals based on predictions vs actual prices."""
+        signals = []
+        
+        for pred, actual in zip(predictions, true_prices):
+            pred_return = (pred - actual) / actual
+            
+            if pred_return > threshold:
+                signal = 1  # Buy
+            elif pred_return < -threshold:
+                signal = -1  # Sell
+            else:
+                signal = 0  # Hold
+            
+            signals.append(signal)
+        
+        signals_df = pd.DataFrame({
+            'signal': signals,
+            'actual_price': true_prices,
+            'predicted_price': predictions
+        }, index=datetime_index)
+        
+        signals_df = signals_df.reset_index()
+        signals_df = signals_df.rename(columns={'index': 'datetime'})
+        return signals_df
+    
+    def prepare_backtest_data(self, df: pd.DataFrame):
+        """Prepare DataFrame for backtester with datetime as column."""
+        if 'datetime' not in df.columns and df.index.name == 'datetime':
+            df = df.reset_index()
+        return df
 
     def build_model(self, params):
-        base = DecisionTreeRegressor(
-        max_depth=params["max_depth"],
-        min_samples_split=params["min_samples_split"]
-    )
+        """Build AdaBoost model with given parameters."""
+        base_estimator = DecisionTreeRegressor(
+            max_depth=params.get("max_depth", 3),
+            min_samples_split=params.get("min_samples_split", 2)
+        )
         return AdaBoostRegressor(
-        estimator=base,   # sklearn >=1.2
-        n_estimators=params["n_estimators"],
-        learning_rate=params["learning_rate"]
+            estimator=base_estimator,
+            n_estimators=params.get("n_estimators", 50),
+            learning_rate=params.get("learning_rate", 0.1),
+            random_state=42
+        )
+
+    def objective(self, trial: optuna.Trial, train_df, backtest_df, N, initial_train_size):
+        """Optuna objective function to maximize PnL - TRAIN ONCE PER TRIAL."""
+        params = {
+            'n_estimators': trial.suggest_int('n_estimators', 50, 500),
+            'learning_rate': trial.suggest_float('learning_rate', 0.01, 1.0, log=True),
+            'max_depth': trial.suggest_int('max_depth', 2, 8),
+            'min_samples_split': trial.suggest_int('min_samples_split', 2, 20)
+        }
+        
+        X_train, y_train, train_datetime = self.create_lagged_features(train_df, N=N)
+        X_backtest, y_backtest, backtest_datetime = self.create_lagged_features(backtest_df, N=N)
+        
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        
+        model = self.build_model(params)
+        model.fit(X_train_scaled, y_train)
+        
+        X_backtest_scaled = scaler.transform(X_backtest)
+        predictions = model.predict(X_backtest_scaled)
+        
+        signals_df = self.generate_signals(predictions, y_backtest, backtest_datetime, threshold=0.005)
+        
+        try:
+            backtest_data_prepared = self.prepare_backtest_data(backtest_df)
+            pnl = self.run_backtest(backtest_data_prepared, signals_df)
+            self.log_trial(trial.number, params, pnl, is_best=False)
+            return pnl
+        except Exception as e:
+            print(f"Backtest failed in trial: {e}")
+            return -float('inf')
+
+    def optimize_hyperparameters(self, train_df, backtest_df, N=10, n_trials=50):
+        """Find best hyperparameters using Optuna based on REAL PnL maximization."""
+        initial_train_size = len(train_df) - N
+        
+        study = optuna.create_study(
+            direction='maximize',
+            sampler=TPESampler(seed=42)  # Use Seed For Reproducibility
+        )
+        
+        study.optimize(
+            lambda trial: self.objective(trial, train_df, backtest_df, N, initial_train_size),
+            n_trials=n_trials,
+            show_progress_bar=True
+        )
+        
+        self.best_params = study.best_params
+        print(f"Best hyperparameters: {study.best_params}")
+        print(f"Best REAL PnL: {study.best_value:.2f}")
+        
+        return study.best_params
+
+    def run_backtest(self, df, signals_df):
+        """Interface to your existing backtester."""
+        from learning_alpha_edge.backtest.main_backtest import Backtester
+        backtester = Backtester(signals_df, df)
+        pnl = backtester.run_backtest()["PnLSum"].iloc[-1]
+        return pnl
+
+    def walk_forward_validation(self, X_full, y_full, initial_train_size, datetime_index, 
+                              params=None, step_size=10):
+        """
+        Walk-forward validation with step size to reduce retraining frequency.
+        Retrains only after every 'step_size' predictions instead of every prediction.
+        """
+        X_train = X_full[:initial_train_size]
+        y_train = y_full[:initial_train_size]
+        
+        predictions = []
+        true_values = []
+        models = []
+        
+        num_predictions = len(X_full) - initial_train_size
+        
+        for i in range(0, num_predictions, step_size):
+            # Determine the end index for this batch
+            end_idx = min(initial_train_size + i + step_size, len(X_full))
+            
+            # Get the batch of data for prediction
+            X_batch = X_full[initial_train_size + i : end_idx]
+            y_batch = y_full[initial_train_size + i : end_idx]
+            
+            # Scale features and train model
+            X_train_scaled = self.scaler.fit_transform(X_train)
+            
+            model = self.build_model(params or {})
+            model.fit(X_train_scaled, y_train)
+            
+            # Predict on the entire batch
+            X_batch_scaled = self.scaler.transform(X_batch)
+            batch_predictions = model.predict(X_batch_scaled)
+            
+            # Store results
+            predictions.extend(batch_predictions)
+            true_values.extend(y_batch)
+            models.append(model)  # Store the last model of each batch
+            
+            # Append the entire batch to training data for next iteration
+            X_train = np.vstack([X_train, X_batch])
+            y_train = np.append(y_train, y_batch)
+            
+            print(f"Processed batch {i//step_size + 1}/{(num_predictions + step_size - 1)//step_size}: "
+                  f"{i + step_size}/{num_predictions} predictions")
+        
+        return np.array(predictions), np.array(true_values), models
+
+    def train_and_generate_signals(self, train_df, backtest_df, N=10, 
+                                 use_optuna=True, n_trials=30, threshold=0.01,
+                                 step_size=10):
+        """Complete training pipeline with step-based walk-forward."""
+        if use_optuna:
+            print("Optimizing hyperparameters with Optuna...")
+            self.optimize_hyperparameters(train_df, backtest_df, N, n_trials)
+        
+        combined_df = pd.concat([train_df, backtest_df])
+        X_combined, y_combined, combined_datetime = self.create_lagged_features(combined_df, N=N)
+        initial_train_size = len(train_df) - N
+        
+        print(f"Running step-based walk-forward validation (step_size={step_size})...")
+        predictions, true_values, models = self.walk_forward_validation(
+            X_combined, y_combined, initial_train_size, combined_datetime, 
+            self.best_params, step_size
+        )
+        
+        # Store the final model
+        self.model = models[-1] if models else None
+        self.save_model(self.model, self.model_name)
+        self.save_metadata(self.best_params)
+        
+        # Generate signals
+        backtest_start_idx = initial_train_size
+        backtest_datetime = combined_datetime[backtest_start_idx:]
+        signals_df = self.generate_signals(predictions, true_values, backtest_datetime, threshold)
+        
+        # Calculate metrics using REAL backtest
+        backtest_data_prepared = self.prepare_backtest_data(backtest_df)
+        final_pnl = self.run_backtest(backtest_data_prepared, signals_df)
+        
+        metrics = {
+            'mse': np.mean((predictions - true_values)**2),
+            'r2': r2_score(true_values, predictions),
+            'final_pnl': final_pnl,
+            'num_retrainings': len(models),
+            'step_size': step_size
+        }
+        
+        return signals_df, metrics
+
+    def forward_test(self, test_df, N=10, threshold=0.01):
+        """Generate signals for forward testing using the trained model."""
+        if self.model is None:
+            raise ValueError("Model must be trained first")
+        
+        X_test, y_test, datetime_index = self.create_lagged_features(test_df, N=N)
+        X_test_scaled = self.scaler.transform(X_test)
+        predictions = self.model.predict(X_test_scaled)
+        
+        signals_df = self.generate_signals(predictions, y_test, datetime_index, threshold)
+        
+        return signals_df
+
+    def run_full_pipeline(self, train_df: pd.DataFrame, backtest_df: pd.DataFrame, test_df: pd.DataFrame, N=10, 
+                         use_optuna=True, n_trials=30, threshold=0.01,
+                         step_size=10):
+        """Complete pipeline with configurable step size."""
+        train_df_prepared = self.prepare_backtest_data(train_df.copy())
+        backtest_df_prepared = self.prepare_backtest_data(backtest_df.copy())
+        test_df_prepared = self.prepare_backtest_data(test_df.copy())
+        
+        print("=== BACKTEST PHASE ===")
+        backtest_signals, metrics = self.train_and_generate_signals(
+            train_df_prepared, backtest_df_prepared, N, use_optuna, n_trials, threshold, step_size
+        )
+        
+        print("=== FORWARD TEST PHASE ===")
+        forward_test_signals = self.forward_test(test_df_prepared, N, threshold)
+        
+        backtest_pnl = self.run_backtest(backtest_df_prepared, backtest_signals)
+        forward_test_pnl = self.run_backtest(test_df_prepared, forward_test_signals)        
+        print(f"\n=== RESULTS ===")
+        print(f"Backtest PnL: {backtest_pnl:.2f}")
+        print(f"Forward Test PnL: {forward_test_pnl:.2f}")
+        print(f"Model MSE: {metrics['mse']:.6f}, R²: {metrics['r2']:.4f}")
+        print(f"Number of retrainings: {metrics['num_retrainings']} (step_size={metrics['step_size']})")
+        
+        return backtest_signals, forward_test_signals, backtest_pnl, forward_test_pnl
+
+
+# Usage
+if __name__ == '__main__':
+    learner = AdaBoostLearner("BTCUSDT", "1h", "binance")
+   
+    train_df, backtest_df, test_df = learner.split_time_series(learner.df, learner.train_split, learner.backtest_split)        
+    
+    # Run with step size - adjust based on your data size
+    backtest_signals, forward_test_signals, backtest_pnl, test_pnl = learner.run_full_pipeline(
+        train_df, backtest_df, test_df, 
+        N=24, 
+        use_optuna=True, 
+        n_trials=20,  # Reduced for faster optimization
+        threshold=0.005,
+        step_size=200  # Retrain every 200 predictions instead of every prediction to reduce overhead
     )
-
-    # ----------------- Training -----------------
-    def train(self):
-        df_base = load_data("binance", "btc_1m", self.engine)
-
-        for interval in self.intervals:
-            print(f"\n[abr] Training {self.symbol} @ {interval} on {self.exchange}")
-
-            def objective(trial: optuna.Trial):
-                # 1) Resample
-                df = resample_ohlcv_data(df_base, interval)
-
-                # 2) Target = next close
-                df["target"] = df["close"].shift(-1)
-
-                # 3) Trial-dependent features
-                df = engineer_features(df, self.config, trial)
-
-                # 4) Drop NaNs
-                df = df.dropna()
-
-                # 5) Split
-                df_train, df_backtest, df_forward = self.split_time_series(
-                    df, train_pct=75.0, backtest_pct=20.0, forward_pct=5.0
-                )
-
-                # 6) Scale (fit only on train)
-                scaler =StandardScaler()
-                X_train = (df_train.drop(columns=["datetime", "target"]))
-                y_train = df_train["target"]
-
-                X_val = (df_backtest.drop(columns=["datetime", "target"]))
-                y_val = df_backtest["target"]
-
-                X_train = scaler.fit_transform(X_train)
-                X_val = scaler.transform(X_val)
-
-                # 7) Build + fit model
-                params = self.suggest_params(trial)
-                model = self.build_model(params)
-                model.fit(X_train, y_train)
-
-                # 8) Backtest on validation
-                preds = model.predict(X_val)
-                signals = generate_signals(df_backtest, preds)
-                backtester = Backtester(signals, df_backtest)
-                pnl = backtester.run_backtest()["PnLSum"].iloc[-1]
-
-                return pnl
-
-            # Run optimization for this interval
-            study = optuna.create_study(direction="maximize")
-            study.optimize(objective, n_trials=5)
-
-            #  Best model training on all data
-            best_params = study.best_trial.params
-            best_model = self.build_model(best_params)
-
-            # Resample + feature engineering again with best params
-            df = resample_ohlcv_data(df_base, interval)
-            df["target"] = df["close"].shift(-1)
-            df = engineer_features(df, self.config, study.best_trial)  # use best trial
-            df = df.dropna()
-
-            df_train, df_backtest, df_forward = self.split_time_series(
-                df, train_pct=75.0, backtest_pct=20.0, forward_pct=5.0
-            )
-
-            scaler = StandardScaler()
-            X_train = (df_train.drop(columns=["datetime", "target"]))
-            y_train = df_train["target"]
-
-            X_forward = (df_forward.drop(columns=["datetime", "target"]))
-            y_forward = df_forward["target"]
-            X_train = scaler.fit_transform(X_train)
-            X_forward = scaler.transform(X_forward)
-
-            best_model.fit(X_train, y_train)
-            prediction = best_model.predict(X_forward)
-            y_forward_pred = prediction
-            mse_f = mean_squared_error(y_forward, y_forward_pred)
-            rmse_f = np.sqrt(mse_f)
-            mae_f = mean_absolute_error(y_forward, y_forward_pred)
-            r2_f = r2_score(y_forward, y_forward_pred)
-            signals = generate_signals(df_forward, prediction)
-            pnl = Backtester(signals, df_forward).run_backtest()["PnLSum"].iloc[-1]
-            print("\nForward Test Performance:")
-            print(f" MSE : {mse_f:.6f}")
-            print(f" RMSE: {rmse_f:.6f}")
-            print(f" MAE : {mae_f:.6f}")
-            print(f" R²  : {r2_f:.6f}")
-
-            print(f"[abr][{interval}] Forward PnL: {pnl:.2f}")
-            print(f"[abr][{interval}] Best trial params: {best_params}")
-
-            # Save model + metadata
-            model_name = f'ada_{self.time_horizon}_{self.exchange}_{interval}_ml{study.best_trial.number}.pkl'
-            self.save_model(best_model, model_name)
-            self.save_metadata(best_params)
-            self.log_trial(study.best_trial.number, best_params, study.best_value, is_best=True)
-
-if __name__=="__main__":
-    learner=AdaBoostLearner("BTCUSDT","1h","binance")
-    learner.train()
+    
+    print(f"\nFinal Results:")
+    print(f"Backtest PnL: {backtest_pnl:.2f}%")
+    print(f"Forward Test PnL: {test_pnl:.2f}%")

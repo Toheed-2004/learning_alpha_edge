@@ -13,15 +13,15 @@ class BaseLearner:
         self.model_name = model_name
         self.exchange = exchange
         # #PATH
-        # self.root_path=os.path.dirname(os.path.abspath(__file__))
-        # self.root_path = os.path.abspath(os.path.join(self.root_path, ".."))
-        # self.root_path = os.path.join(self.root_path, "train", symbol, time_horizon)
+        self.root_path=os.path.dirname(os.path.abspath(__file__))
+        self.root_path = os.path.abspath(os.path.join(self.root_path, ".."))
+        self.root_path = os.path.join(self.root_path, "train", symbol, time_horizon)
         # os.makedirs(self.root_path, exist_ok=True)
-        # self.model_path = os.path.join(self.root_path, "models",f'ml_{self.model_name}')
+        self.model_path = os.path.join(self.root_path, "models",f'ml_{self.model_name}')
         # os.makedirs(self.model_path, exist_ok=True)
-        # self.db_path = os.path.join(self.root_path, "dbs")
-        # os.makedirs(self.db_path, exist_ok=True)
-        # self.meta_path = os.path.join(self.root_path, "metadata")
+        self.db_path = os.path.join(self.root_path, "dbs")
+        os.makedirs(self.db_path, exist_ok=True)
+        self.meta_path = os.path.join(self.root_path, "metadata")
         # os.makedirs(self.meta_path, exist_ok=True)
 
         # Config
@@ -33,7 +33,7 @@ class BaseLearner:
         self.train_split = float(self.config["train"]["train_split_percent"]) 
         self.backtest_split = float(self.config["train"]["backtest_split_percent"]) 
         self.forwardtest_split = float(self.config["train"]["forwardtest_split_percent"]) 
-        self.optuna_trials = eval(self.config["train"]["optuna_trials_per_model"])[f'{model_name}']
+        # self.optuna_trials = eval(self.config["train"]["optuna_trials_per_model"])[f'{model_name}']
         
         
         # DB engine
@@ -55,7 +55,7 @@ class BaseLearner:
         Save the trained model to the model_path.
         """
         # ensure directory exists
-        model_file = os.path.join(self.model_path, f"{model_name}")
+        model_file = os.path.join(self.model_path, f"ml_{model_name}.pkl")
         
         with open(model_file, "wb") as f:
             joblib.dump(model, f)

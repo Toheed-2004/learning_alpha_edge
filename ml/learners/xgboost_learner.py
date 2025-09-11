@@ -113,6 +113,7 @@ class xgboost_learner(BaseLearner):
         try:
             backtest_data_prepared = self.prepare_backtest_data(backtest_df)
             pnl = self.run_backtest(backtest_data_prepared,signals_df )
+            self.log_trial(trial.number, params, pnl, is_best=False)
             return pnl
         except Exception as e:
             print(f"Backtest failed in trial: {e}")
@@ -224,7 +225,8 @@ class xgboost_learner(BaseLearner):
         
         # Store the final model
         self.model = models[-1] if models else None
-        self.save_model(self.model,self.model_name)
+        self.save_model(self.model, self.model_name)
+        self.save_metadata(self.best_params)
         # Generate signals
         backtest_start_idx = initial_train_size
         backtest_datetime = combined_datetime[backtest_start_idx:]
