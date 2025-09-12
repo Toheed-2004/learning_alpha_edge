@@ -16,7 +16,7 @@ class Executor ():
         self.engine = get_pg_engine(db_credentials["user"], db_credentials["password"], db_credentials["host"], db_credentials["port"], db_credentials["dbname"])
         self.strategies_df=self.load_strategies_from_db()
         self.strategies=[self.parse_strategy_row(strategy) for _,strategy in self.strategies_df.iterrows()]
-        self.session=HTTP(api_key=os.getenv("BINANCE_TESTNET_KEY"),api_secret=os.getenv("BINANCE_TESTNET_SECRET"),testnet=True)
+        self.session=HTTP(api_key=os.getenv("BYBIT_TESTNET_KEY"),api_secret=os.getenv("BYBIT_TESTNET_SECRET"),testnet=True)
 
 
 
@@ -54,7 +54,24 @@ class Executor ():
             "timeperiods": timeperiods,
         }
 
-    def fetch_ohlcv(self,symbol,interval):
+    def fetch_ohlcv(self):
+        response = self.session.get_kline(
+        
+            category="linear",
+            symbol="BTCUSDT",
+            interval=240,
+            limit=1000
+        )
+        response=response.get("result").get("list")
+        df = pd.DataFrame(response, columns=[
+        'open_time', 'open', 'high', 'low', 'close', 'volume', 'turnover'
+    ])
+
+        df['open_time'] = pd.to_datetime(pd.to_numeric(df['open_time'], errors='coerce'), unit='ms',utc=True)
+        df = df[['open_time', 'open', 'high', 'low', 'close', 'volume']]
+        df.sort_values(by="open_time",ascending=True,inplace=True)
+        df.rename(columns={"open_time":"datetime"},inplace=True)
+        print("break")
         
 
 
@@ -76,5 +93,6 @@ class Executor ():
 
 if __name__=="__main__":
     executor=Executor()
+    executor.fetch_ohlcv()
     
     
