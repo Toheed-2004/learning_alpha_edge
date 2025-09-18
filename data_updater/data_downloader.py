@@ -8,8 +8,8 @@ import sqlalchemy
 from sqlalchemy import Engine
 
 class Data_Downloader:
-    def __init__(self, symbol: str, exchange: str, resample_to: str):
-        print('[INFO] In PostgreSQL Data_Downloader constructor')
+    def __init__(self, symbol: str, exchange: str, resample_to: str,limit=1):
+        # print('[INFO] In PostgreSQL Data_Downloader constructor')
         self.symbol = symbol
         self.base_symbol = self.symbol.replace("USDT", "").lower()
         self.exchange = exchange.lower()
@@ -19,6 +19,7 @@ class Data_Downloader:
         # self.engine = engine
         self.full_df = None
         self.resampled_df = None
+        self.limit=limit
         self._update()
 
     def _update(self):
@@ -37,7 +38,7 @@ class Data_Downloader:
         if self.exchange == 'binance':
             df = binance_fetcher.fetch_data(self.symbol, new_start_date, new_end_date)
         else:
-            df = bybit_fetcher.fetch_data(self.symbol, new_start_date, new_end_date)
+            df = bybit_fetcher.fetch_data(self.symbol, new_start_date, new_end_date,limit=self.limit)
             df.rename(columns={'open_time': 'datetime'}, inplace=True)
             df = df[['datetime', 'open', 'high', 'low', 'close', 'volume']]
             for col in ['open', 'high', 'low', 'close', 'volume']:

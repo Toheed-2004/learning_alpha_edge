@@ -21,33 +21,37 @@ def randomly_select_indicators(indicator_map):
 
 
 # Apply only selected indicators
-def apply_indicators(df:pd.DataFrame, randomly_selected_indicators, timeperiods):
+def apply_indicators(df: pd.DataFrame, enabled_indicators, timeperiods):
     df = df.copy()
     indicators_df = df[["open", "high", "low", "close", "volume"]].copy()
     existing_cols = set(indicators_df.columns)
 
-    for name in randomly_selected_indicators:
+    for name in enabled_indicators:
         func = indicator_map.get(name)
-        if func:
-            sig = inspect.signature(func)
-            params = sig.parameters
-
-            if 'timeperiod' in params:
-                timeperiod=timeperiods.get(name,20)
-                timeperiod=20
-                result_df=func(df,timeperiod)
-            else:
-                result_df:pd.DataFrame = func(df)
-
-            new_cols = set(result_df.columns) - existing_cols
-            new_data = result_df[list(new_cols)]
-            indicators_df = pd.concat([indicators_df, new_data], axis=1)
-            existing_cols.update(new_cols)
-        else:
+        if not func:
             print(f"[WARN] No handler for indicator '{name}'")
+            continue
+
+        sig = inspect.signature(func)
+        params = sig.parameters
+
+        if "timeperiod" in params:
+            timeperiod = timeperiods.get(name, 20)  
+            result_df = func(df, timeperiod)
+        else:
+            result_df = func(df)
+
+        # Only take new columns to avoid duplication
+        new_cols = set(result_df.columns) - existing_cols
+        if not new_cols:
+            print(f"[INFO] Indicator '{name}' added no new columns.")
+            continue
+
+        new_data = result_df[list(new_cols)]
+        indicators_df = pd.concat([indicators_df, new_data], axis=1)
+        existing_cols.update(new_cols)
 
     return indicators_df
-
 def majority_vote(signals_df:pd.DataFrame):
     signal_columns = signals_df.drop(columns=["datetime", "open", "high", "low", "close", "volume"])
 

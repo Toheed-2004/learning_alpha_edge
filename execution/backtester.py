@@ -1,23 +1,4 @@
 #!/usr/bin/env python3
-"""
-bybit_live_executor.py
-
-Enhanced Bybit live executor with historical gap filling for accurate performance evaluation.
-Handles downtime by reconstructing missed trades using historical OHLCV data.
-
-Features:
-- Live signal processing with real order execution
-- Historical gap filling for missed signals during downtime
-- Hybrid simulation/live mode for accurate performance tracking
-- Comprehensive state management and reconciliation
-- Configurable trade sizing and risk management
-
-Environment variables:
-  DATABASE_URL, BYBIT_API_KEY, BYBIT_API_SECRET, BYBIT_TESTNET
-  EXECUTOR_POLL_INTERVAL, TRADE_USDT, TRADE_RS, DEFAULT_TP, DEFAULT_SL
-  STRATEGY_TIMEFRAME (e.g., '1h', '4h') - MUST be set to match signal interval
-"""
-
 import os
 import time
 import logging

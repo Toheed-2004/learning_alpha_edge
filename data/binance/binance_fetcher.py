@@ -29,9 +29,9 @@ def fetch_data(symbol, start_date, end_date,interval="1m"):
         klines = client.get_historical_klines(
             symbol=symbol,
             interval=interval,
-            start_str=start_ts,
-            end_str=end_ts,
-            limit=limit
+            # start_str=start_ts,
+            # end_str=end_ts,
+            limit=1
         )
 
         if not klines:

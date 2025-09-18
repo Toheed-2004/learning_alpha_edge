@@ -47,7 +47,7 @@ def resample_ohlcv_data(df: pd.DataFrame, new_interval: str) -> pd.DataFrame:
 
     # Ensure datetime column is datetime and set as index
     if 'datetime' in df.columns:
-        df['datetime'] = pd.to_datetime(df['datetime'], errors='coerce')
+        df['datetime'] = pd.to_datetime(df['datetime'], errors='coerce',utc=True)
         df = df.set_index('datetime')
 
     # Sort and drop any NaT values
